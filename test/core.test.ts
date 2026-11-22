@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { hydrateHistory } from '../src/agent/runner';
 import { parseAllowedUserIds } from '../src/config/env';
 import { buildSafeFtsQuery } from '../src/db/queries';
 import { normalizeWorkersAIResponse } from '../src/llm/workers-ai';
@@ -150,5 +151,60 @@ describe('markdownToTelegramHtml', () => {
     expect(html).toContain('• Пункт 2');
     expect(html).toContain('<a href="https://example.com">Ссылка</a>');
     expect(html).toContain('<pre><code>const x = a &lt; b &amp;&amp; c &gt; d;</code></pre>');
+  });
+});
+
+describe('hydrateHistory', () => {
+  it('drops orphan tool messages and enforces single tool call per assistant turn', () => {
+    const hydrated = hydrateHistory([
+      {
+        id: 1,
+        chat_id: 1,
+        role: 'tool',
+        content: '{"orphan":true}',
+        tool_calls_json: null,
+        tool_call_id: 'call_0',
+        created_at: 1,
+      },
+      {
+        id: 2,
+        chat_id: 1,
+        role: 'assistant',
+        content: '',
+        tool_calls_json: JSON.stringify([
+          { id: 'call_1', name: 'a', arguments: {} },
+          { id: 'call_2', name: 'b', arguments: {} },
+        ]),
+        tool_call_id: null,
+        created_at: 2,
+      },
+      {
+        id: 3,
+        chat_id: 1,
+        role: 'tool',
+        content: '{"ok":1}',
+        tool_calls_json: null,
+        tool_call_id: 'call_1',
+        created_at: 3,
+      },
+      {
+        id: 4,
+        chat_id: 1,
+        role: 'tool',
+        content: '{"ok":2}',
+        tool_calls_json: null,
+        tool_call_id: 'call_2',
+        created_at: 4,
+      },
+    ]);
+
+    expect(hydrated).toHaveLength(2);
+    expect(hydrated[0].role).toBe('assistant');
+    expect(hydrated[0].tool_calls).toHaveLength(1);
+    expect(hydrated[1]).toEqual({
+      role: 'tool',
+      content: '{"ok":1}',
+      tool_call_id: 'call_1',
+    });
   });
 });

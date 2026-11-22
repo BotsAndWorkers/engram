@@ -90,24 +90,58 @@ export function buildSystemPrompt(
   ].join('\n');
 }
 
-function hydrateHistory(rows: MessageRow[]): ChatMessage[] {
-  return rows.map((row) => {
-    let toolCalls: ToolCall[] | undefined;
-    if (row.tool_calls_json) {
+export function hydrateHistory(rows: MessageRow[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+  let expectedToolCallId: string | null = null;
+
+  for (const row of rows) {
+    if (row.role === 'tool') {
+      if (expectedToolCallId && row.tool_call_id === expectedToolCallId) {
+        result.push({
+          role: 'tool',
+          content: row.content,
+          tool_call_id: row.tool_call_id,
+        });
+        expectedToolCallId = null;
+      }
+      continue;
+    }
+
+    // If previous assistant tool_call has no matching tool response, drop it
+    if (expectedToolCallId) {
+      result.pop();
+      expectedToolCallId = null;
+    }
+
+    if (row.role === 'assistant' && row.tool_calls_json) {
       try {
-        toolCalls = JSON.parse(row.tool_calls_json) as ToolCall[];
+        const parsed = JSON.parse(row.tool_calls_json) as ToolCall[];
+        const firstCall = parsed[0];
+        if (firstCall) {
+          result.push({
+            role: 'assistant',
+            content: row.content,
+            tool_calls: [firstCall],
+          });
+          expectedToolCallId = firstCall.id;
+          continue;
+        }
       } catch {
-        toolCalls = undefined;
+        // Fall through as plain assistant message
       }
     }
 
-    return {
+    result.push({
       role: row.role,
       content: row.content,
-      ...(toolCalls ? { tool_calls: toolCalls } : {}),
-      ...(row.tool_call_id ? { tool_call_id: row.tool_call_id } : {}),
-    };
-  });
+    });
+  }
+
+  if (expectedToolCallId) {
+    result.pop();
+  }
+
+  return result;
 }
 
 export async function runAgentTurn(params: {
@@ -187,10 +221,13 @@ export async function runAgentTurn(params: {
       break;
     }
 
+    // Many Workers AI models only support one tool call per assistant turn
+    const callsToRun = response.toolCalls.slice(0, 1);
+
     const assistantMsg: ChatMessage = {
       role: 'assistant',
       content: response.content || '',
-      tool_calls: response.toolCalls,
+      tool_calls: callsToRun,
     };
     conversation.push(assistantMsg);
 
@@ -198,10 +235,10 @@ export async function runAgentTurn(params: {
       chatId,
       role: 'assistant',
       content: assistantMsg.content,
-      toolCallsJson: JSON.stringify(response.toolCalls),
+      toolCallsJson: JSON.stringify(callsToRun),
     });
 
-    for (const tc of response.toolCalls) {
+    for (const tc of callsToRun) {
       const statusLabel = TOOL_STATUS_LABELS[tc.name] ?? `Выполняю ${tc.name}...`;
       await updatePlaceholder(statusLabel, true);
 
