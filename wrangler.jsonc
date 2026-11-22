@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "engram",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-22",
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "engram-db",
+      "database_id": "5d33b961-7fb1-47b7-a8e6-b9dec9721637",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "DEFAULT_TIMEZONE": "Asia/Novosibirsk",
+    "LLM_PROVIDER": "workers-ai",
+    "WORKERS_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "WORKERS_AI_WHISPER_MODEL": "@cf/openai/whisper"
+  }
+}

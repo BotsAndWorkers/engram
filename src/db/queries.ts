@@ -1,0 +1,505 @@
+import type {
+  MemoryRow,
+  MessageRow,
+  NoteRow,
+  ReminderRow,
+  UserSettingsRow,
+} from './types';
+
+/**
+ * Marks a Telegram update_id as processed.
+ * Returns true if this update has not been seen before.
+ */
+export async function tryMarkUpdateProcessed(
+  db: D1Database,
+  updateId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      'INSERT OR IGNORE INTO processed_updates (update_id, processed_at) VALUES (?, ?)',
+    )
+    .bind(updateId, Date.now())
+    .run();
+
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function cleanupOldProcessedUpdates(
+  db: D1Database,
+  olderThanMs: number,
+): Promise<void> {
+  const cutoff = Date.now() - olderThanMs;
+  await db
+    .prepare('DELETE FROM processed_updates WHERE processed_at < ?')
+    .bind(cutoff)
+    .run();
+}
+
+/* ---------------- Messages ---------------- */
+
+export async function getRecentMessages(
+  db: D1Database,
+  chatId: number,
+  limit = 16,
+): Promise<MessageRow[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT id, chat_id, role, content, tool_calls_json, tool_call_id, created_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?',
+    )
+    .bind(chatId, limit)
+    .all<MessageRow>();
+
+  return results.reverse();
+}
+
+export async function appendMessage(
+  db: D1Database,
+  params: {
+    chatId: number;
+    role: 'user' | 'assistant' | 'tool';
+    content: string;
+    toolCallsJson?: string | null;
+    toolCallId?: string | null;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      'INSERT INTO messages (chat_id, role, content, tool_calls_json, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    .bind(
+      params.chatId,
+      params.role,
+      params.content,
+      params.toolCallsJson ?? null,
+      params.toolCallId ?? null,
+      Date.now(),
+    )
+    .run();
+}
+
+export async function clearMessages(db: D1Database, chatId: number): Promise<void> {
+  await db.prepare('DELETE FROM messages WHERE chat_id = ?').bind(chatId).run();
+}
+
+export async function pruneOldMessages(
+  db: D1Database,
+  chatId: number,
+  keepLast = 60,
+): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM messages
+       WHERE chat_id = ?
+         AND id NOT IN (
+           SELECT id FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?
+         )`,
+    )
+    .bind(chatId, chatId, keepLast)
+    .run();
+}
+
+/* ---------------- Notes & FTS5 ---------------- */
+
+/**
+ * Escapes user query into safe FTS5 prefix tokens so special syntax characters
+ * (quotes, colons, hyphens, boolean operators) cannot break MATCH.
+ */
+export function buildSafeFtsQuery(rawQuery: string): string {
+  const tokens = rawQuery
+    .trim()
+    .split(/[\s,.;:!?/\\()[\]{}"'`~@#$%^&*+=<>|]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+
+  if (tokens.length === 0) return '';
+  return tokens.map((t) => `"${t}"*`).join(' ');
+}
+
+export async function createNote(
+  db: D1Database,
+  userId: number,
+  title: string,
+  content: string,
+  tags: string,
+): Promise<NoteRow> {
+  const now = Date.now();
+  const result = await db
+    .prepare(
+      'INSERT INTO notes (user_id, title, content, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING *',
+    )
+    .bind(userId, title.trim(), content.trim(), normalizeTags(tags), now, now)
+    .first<NoteRow>();
+
+  if (!result) {
+    throw new Error('Failed to insert note');
+  }
+  return result;
+}
+
+export async function getNoteById(
+  db: D1Database,
+  userId: number,
+  noteId: number,
+): Promise<NoteRow | null> {
+  return db
+    .prepare('SELECT * FROM notes WHERE id = ? AND user_id = ?')
+    .bind(noteId, userId)
+    .first<NoteRow>();
+}
+
+export async function updateNote(
+  db: D1Database,
+  userId: number,
+  noteId: number,
+  patch: { title?: string; content?: string; tags?: string },
+): Promise<NoteRow | null> {
+  const existing = await getNoteById(db, userId, noteId);
+  if (!existing) return null;
+
+  const nextTitle = patch.title !== undefined ? patch.title.trim() : existing.title;
+  const nextContent =
+    patch.content !== undefined ? patch.content.trim() : existing.content;
+  const nextTags =
+    patch.tags !== undefined ? normalizeTags(patch.tags) : existing.tags;
+
+  return db
+    .prepare(
+      'UPDATE notes SET title = ?, content = ?, tags = ?, updated_at = ? WHERE id = ? AND user_id = ? RETURNING *',
+    )
+    .bind(nextTitle, nextContent, nextTags, Date.now(), noteId, userId)
+    .first<NoteRow>();
+}
+
+export async function deleteNote(
+  db: D1Database,
+  userId: number,
+  noteId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM notes WHERE id = ? AND user_id = ?')
+    .bind(noteId, userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function listRecentNotes(
+  db: D1Database,
+  userId: number,
+  limit = 10,
+): Promise<NoteRow[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT * FROM notes WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?',
+    )
+    .bind(userId, limit)
+    .all<NoteRow>();
+  return results;
+}
+
+export async function searchNotes(
+  db: D1Database,
+  userId: number,
+  query: string,
+  tag?: string,
+  limit = 10,
+): Promise<NoteRow[]> {
+  const ftsQuery = buildSafeFtsQuery(query);
+  const cleanTag = tag?.trim().toLowerCase() ?? '';
+
+  if (ftsQuery) {
+    try {
+      const sql = cleanTag
+        ? `SELECT n.* FROM notes n
+           JOIN notes_fts fts ON n.id = fts.rowid
+           WHERE n.user_id = ? AND notes_fts MATCH ? AND LOWER(n.tags) LIKE ?
+           ORDER BY bm25(notes_fts) LIMIT ?`
+        : `SELECT n.* FROM notes n
+           JOIN notes_fts fts ON n.id = fts.rowid
+           WHERE n.user_id = ? AND notes_fts MATCH ?
+           ORDER BY bm25(notes_fts) LIMIT ?`;
+
+      const stmt = cleanTag
+        ? db.prepare(sql).bind(userId, ftsQuery, `%${cleanTag}%`, limit)
+        : db.prepare(sql).bind(userId, ftsQuery, limit);
+
+      const { results } = await stmt.all<NoteRow>();
+      if (results.length > 0) return results;
+    } catch {
+      // Fall back to LIKE search if FTS query fails
+    }
+  }
+
+  const likePattern = `%${query.trim().toLowerCase()}%`;
+  if (cleanTag) {
+    const { results } = await db
+      .prepare(
+        `SELECT * FROM notes
+         WHERE user_id = ?
+           AND LOWER(tags) LIKE ?
+           AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ?)
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .bind(userId, `%${cleanTag}%`, likePattern, likePattern, limit)
+      .all<NoteRow>();
+    return results;
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM notes
+       WHERE user_id = ?
+         AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(tags) LIKE ?)
+       ORDER BY updated_at DESC LIMIT ?`,
+    )
+    .bind(userId, likePattern, likePattern, likePattern, limit)
+    .all<NoteRow>();
+  return results;
+}
+
+function normalizeTags(raw: string): string {
+  if (!raw) return '';
+  const unique = new Set(
+    raw
+      .split(',')
+      .map((t) => t.trim().toLowerCase().replace(/^#/, ''))
+      .filter(Boolean),
+  );
+  return Array.from(unique).join(', ');
+}
+
+/* ---------------- Reminders ---------------- */
+
+export async function createReminder(
+  db: D1Database,
+  params: {
+    userId: number;
+    chatId: number;
+    text: string;
+    dueAt: number;
+    repeatIntervalMinutes?: number | null;
+  },
+): Promise<ReminderRow> {
+  const result = await db
+    .prepare(
+      `INSERT INTO reminders (user_id, chat_id, text, due_at, repeat_interval_minutes, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?)
+       RETURNING *`,
+    )
+    .bind(
+      params.userId,
+      params.chatId,
+      params.text.trim(),
+      params.dueAt,
+      params.repeatIntervalMinutes ?? null,
+      Date.now(),
+    )
+    .first<ReminderRow>();
+
+  if (!result) {
+    throw new Error('Failed to create reminder');
+  }
+  return result;
+}
+
+export async function listReminders(
+  db: D1Database,
+  userId: number,
+  status: 'pending' | 'done' | 'all' = 'pending',
+  limit = 20,
+): Promise<ReminderRow[]> {
+  if (status === 'all') {
+    const { results } = await db
+      .prepare(
+        'SELECT * FROM reminders WHERE user_id = ? ORDER BY due_at ASC LIMIT ?',
+      )
+      .bind(userId, limit)
+      .all<ReminderRow>();
+    return results;
+  }
+
+  const { results } = await db
+    .prepare(
+      'SELECT * FROM reminders WHERE user_id = ? AND status = ? ORDER BY due_at ASC LIMIT ?',
+    )
+    .bind(userId, status, limit)
+    .all<ReminderRow>();
+  return results;
+}
+
+export async function getDueReminders(
+  db: D1Database,
+  nowMs: number,
+  limit = 25,
+): Promise<ReminderRow[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT * FROM reminders WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC LIMIT ?",
+    )
+    .bind(nowMs, limit)
+    .all<ReminderRow>();
+  return results;
+}
+
+export async function completeReminder(
+  db: D1Database,
+  userId: number,
+  reminderId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      "UPDATE reminders SET status = 'done', sent_at = COALESCE(sent_at, ?) WHERE id = ? AND user_id = ?",
+    )
+    .bind(Date.now(), reminderId, userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function snoozeReminder(
+  db: D1Database,
+  userId: number,
+  reminderId: number,
+  minutes: number,
+): Promise<ReminderRow | null> {
+  const nextDue = Date.now() + minutes * 60_000;
+  return db
+    .prepare(
+      "UPDATE reminders SET status = 'pending', due_at = ? WHERE id = ? AND user_id = ? RETURNING *",
+    )
+    .bind(nextDue, reminderId, userId)
+    .first<ReminderRow>();
+}
+
+export async function markReminderDispatched(
+  db: D1Database,
+  reminder: ReminderRow,
+  nowMs: number,
+): Promise<void> {
+  if (reminder.repeat_interval_minutes && reminder.repeat_interval_minutes > 0) {
+    const stepMs = reminder.repeat_interval_minutes * 60_000;
+    let nextDue = reminder.due_at + stepMs;
+    while (nextDue <= nowMs) {
+      nextDue += stepMs;
+    }
+    await db
+      .prepare('UPDATE reminders SET due_at = ?, sent_at = ? WHERE id = ?')
+      .bind(nextDue, nowMs, reminder.id)
+      .run();
+    return;
+  }
+
+  await db
+    .prepare("UPDATE reminders SET status = 'done', sent_at = ? WHERE id = ?")
+    .bind(nowMs, reminder.id)
+    .run();
+}
+
+export async function deleteReminder(
+  db: D1Database,
+  userId: number,
+  reminderId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?')
+    .bind(reminderId, userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/* ---------------- Long-term Memory ---------------- */
+
+export async function upsertMemory(
+  db: D1Database,
+  userId: number,
+  key: string,
+  value: string,
+): Promise<MemoryRow> {
+  const cleanKey = key.trim().toLowerCase();
+  const cleanValue = value.trim();
+  const now = Date.now();
+
+  const result = await db
+    .prepare(
+      `INSERT INTO memories (user_id, key, value, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = excluded.updated_at
+       RETURNING *`,
+    )
+    .bind(userId, cleanKey, cleanValue, now)
+    .first<MemoryRow>();
+
+  if (!result) {
+    throw new Error('Failed to save memory');
+  }
+  return result;
+}
+
+export async function deleteMemory(
+  db: D1Database,
+  userId: number,
+  key: string,
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM memories WHERE user_id = ? AND key = ?')
+    .bind(userId, key.trim().toLowerCase())
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function listMemories(
+  db: D1Database,
+  userId: number,
+): Promise<MemoryRow[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM memories WHERE user_id = ? ORDER BY updated_at DESC')
+    .bind(userId)
+    .all<MemoryRow>();
+  return results;
+}
+
+/* ---------------- User Settings ---------------- */
+
+export async function getUserSettings(
+  db: D1Database,
+  userId: number,
+): Promise<UserSettingsRow | null> {
+  return db
+    .prepare('SELECT * FROM user_settings WHERE user_id = ?')
+    .bind(userId)
+    .first<UserSettingsRow>();
+}
+
+export async function setUserTimezone(
+  db: D1Database,
+  userId: number,
+  timezone: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, timezone, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET
+         timezone = excluded.timezone,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, timezone, Date.now())
+    .run();
+}
+
+export async function setUserModel(
+  db: D1Database,
+  userId: number,
+  modelOverride: string | null,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, model_override, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET
+         model_override = excluded.model_override,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, modelOverride, Date.now())
+    .run();
+}

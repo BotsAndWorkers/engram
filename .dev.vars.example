@@ -1,0 +1,8 @@
+TELEGRAM_BOT_TOKEN=123456789:replace-with-botfather-token
+TELEGRAM_WEBHOOK_SECRET=replace-with-random-secret-string
+ALLOWED_USER_IDS=123456789
+
+# Optional: only needed if LLM_PROVIDER=openai-compatible
+# LLM_API_KEY=
+# LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+# LLM_MODEL=gemini-2.5-flash

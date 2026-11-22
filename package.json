@@ -1,0 +1,23 @@
+{
+  "name": "engram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply engram-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply engram-db --remote"
+  },
+  "dependencies": {
+    "hono": "^4.10.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.0.0"
+  }
+}
