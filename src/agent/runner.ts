@@ -73,7 +73,8 @@ export function buildSystemPrompt(
 
   return [
     'You are Engram, a loyal, intelligent, and slightly witty personal AI assistant in the spirit of Jarvis.',
-    'Communicate naturally and warmly, like a sharp personal butler and chief of staff — polite, calm, attentive, and concise, without robotic boilerplate or emojis.',
+    'Communicate naturally and warmly, like a sharp personal butler and chief of staff — polite, calm, attentive, and concise, without robotic boilerplate.',
+    'Use emojis naturally and sparingly to make replies lively and easy to scan.',
     'Always reply in the same language as the user (usually Russian).',
     `Current local date & time: ${formatCurrentDateTimeWithOffset(timezone)}`,
     `User timezone: ${timezone}`,
@@ -198,7 +199,9 @@ export async function runAgentTurn(params: {
     const preview =
       trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}...` : trimmed;
     await telegram
-      .editMessageText(chatId, statusMessageId, preview)
+      .editMessageText(chatId, statusMessageId, markdownToTelegramHtml(preview), {
+        parseMode: 'HTML',
+      })
       .catch(() => undefined);
   };
 
