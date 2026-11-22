@@ -86,6 +86,8 @@ export function buildSystemPrompt(
     '- Proactively call remember_fact when the user mentions stable personal details, projects, preferences, or habits worth keeping.',
     '- When the user asks about past notes or saved information, call search_notes or list_recent_notes first instead of guessing.',
     '- When creating a reminder, convert relative dates like "завтра в 10:00" or "через 30 минут" accurately using the current local date & time above.',
+    '- Never mention internal tool names or parameter names (such as save_note, search_notes, due_at_iso, tags) to the user. Describe your capabilities in natural human terms.',
+    '- Format replies with clean Markdown (**bold** for headings and key phrases, bullet lists, > blockquotes for highlights, and `code` for commands/values) so they render cleanly in Telegram.',
     '- Keep replies natural, clear, and to the point.',
   ].join('\n');
 }
