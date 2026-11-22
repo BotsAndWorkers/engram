@@ -4,6 +4,7 @@ import { buildSafeFtsQuery } from '../src/db/queries';
 import { normalizeWorkersAIResponse } from '../src/llm/workers-ai';
 import { verifySecretToken } from '../src/telegram/auth';
 import { splitTelegramMessage } from '../src/telegram/client';
+import { markdownToTelegramHtml } from '../src/telegram/format';
 import {
   buildClearConfirmScreen,
   buildHelpScreen,
@@ -123,5 +124,31 @@ describe('telegram UI screens', () => {
     expect(clear.replyMarkup.inline_keyboard[0][0].callback_data).toBe('menu:clear_ok');
     expect(MODEL_PRESETS.length).toBeGreaterThanOrEqual(4);
     expect(TIMEZONE_PRESETS.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('markdownToTelegramHtml', () => {
+  it('converts headings, bold, italic, lists, links, and code blocks', () => {
+    const input = [
+      '# Заголовок',
+      '',
+      '**Жирный** и *курсив* и `inline <tag>`',
+      '* Пункт 1',
+      '- Пункт 2',
+      '[Ссылка](https://example.com)',
+      '```ts',
+      'const x = a < b && c > d;',
+      '```',
+    ].join('\n');
+
+    const html = markdownToTelegramHtml(input);
+    expect(html).toContain('<b>Заголовок</b>');
+    expect(html).toContain('<b>Жирный</b>');
+    expect(html).toContain('<i>курсив</i>');
+    expect(html).toContain('<code>inline &lt;tag&gt;</code>');
+    expect(html).toContain('• Пункт 1');
+    expect(html).toContain('• Пункт 2');
+    expect(html).toContain('<a href="https://example.com">Ссылка</a>');
+    expect(html).toContain('<pre><code>const x = a &lt; b &amp;&amp; c &gt; d;</code></pre>');
   });
 });

@@ -10,6 +10,7 @@ import type { MemoryRow, MessageRow } from '../db/types';
 import { createLLMProvider } from '../llm/factory';
 import type { ChatMessage, ToolCall } from '../llm/types';
 import type { TelegramClient } from '../telegram/client';
+import { markdownToTelegramHtml } from '../telegram/format';
 import type { InlineKeyboardButton } from '../telegram/types';
 import { executeTool, getToolDefinitions } from '../tools/registry';
 
@@ -286,19 +287,22 @@ export async function runAgentTurn(params: {
     });
   }
 
-  const replyOptions =
-    actionRow.length > 0
+  const formattedFinal = markdownToTelegramHtml(finalText);
+  const replyOptions = {
+    parseMode: 'HTML' as const,
+    ...(actionRow.length > 0
       ? { replyMarkup: { inline_keyboard: [actionRow] } }
-      : undefined;
+      : {}),
+  };
 
   if (statusMessageId) {
     await telegram.editMessageText(
       chatId,
       statusMessageId,
-      finalText,
+      formattedFinal,
       replyOptions,
     );
   } else {
-    await telegram.sendMessage(chatId, finalText, replyOptions);
+    await telegram.sendMessage(chatId, formattedFinal, replyOptions);
   }
 }

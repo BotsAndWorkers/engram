@@ -81,6 +81,7 @@ export class TelegramClient {
     text: string,
     options?: {
       replyMarkup?: InlineKeyboardMarkup;
+      parseMode?: 'HTML';
     },
   ): Promise<number> {
     const chunks = splitTelegramMessage(text);
@@ -92,15 +93,29 @@ export class TelegramClient {
         chat_id: chatId,
         text: chunks[i],
       };
+      if (options?.parseMode) {
+        payload.parse_mode = options.parseMode;
+      }
       if (isLast && options?.replyMarkup) {
         payload.reply_markup = options.replyMarkup;
       }
 
-      const result = await this.call<{ message_id: number }>(
-        'sendMessage',
-        payload,
-      );
-      lastMessageId = result.message_id;
+      try {
+        const result = await this.call<{ message_id: number }>(
+          'sendMessage',
+          payload,
+        );
+        lastMessageId = result.message_id;
+      } catch (err) {
+        if (!options?.parseMode) throw err;
+        // Fallback to plain text if Telegram rejects HTML entities
+        delete payload.parse_mode;
+        const result = await this.call<{ message_id: number }>(
+          'sendMessage',
+          payload,
+        );
+        lastMessageId = result.message_id;
+      }
     }
 
     return lastMessageId;
@@ -112,6 +127,7 @@ export class TelegramClient {
     text: string,
     options?: {
       replyMarkup?: InlineKeyboardMarkup;
+      parseMode?: 'HTML';
     },
   ): Promise<void> {
     const chunks = splitTelegramMessage(text);
@@ -122,11 +138,20 @@ export class TelegramClient {
       message_id: messageId,
       text: first,
     };
+    if (options?.parseMode) {
+      payload.parse_mode = options.parseMode;
+    }
     if (chunks.length === 1 && options?.replyMarkup) {
       payload.reply_markup = options.replyMarkup;
     }
 
-    await this.call('editMessageText', payload);
+    try {
+      await this.call('editMessageText', payload);
+    } catch (err) {
+      if (!options?.parseMode) throw err;
+      delete payload.parse_mode;
+      await this.call('editMessageText', payload);
+    }
 
     for (let i = 1; i < chunks.length; i += 1) {
       const isLast = i === chunks.length - 1;
