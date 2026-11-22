@@ -17,6 +17,15 @@ export interface TelegramVoice {
   file_size?: number;
 }
 
+export interface TelegramForwardOrigin {
+  type: 'user' | 'hidden_user' | 'chat' | 'channel';
+  date?: number;
+  sender_user?: TelegramUser;
+  sender_user_name?: string;
+  sender_chat?: { title?: string; username?: string };
+  chat?: { title?: string; username?: string };
+}
+
 export interface TelegramMessage {
   message_id: number;
   from?: TelegramUser;
@@ -25,7 +34,7 @@ export interface TelegramMessage {
   text?: string;
   caption?: string;
   voice?: TelegramVoice;
-  forward_origin?: unknown;
+  forward_origin?: TelegramForwardOrigin;
 }
 
 export interface TelegramCallbackQuery {

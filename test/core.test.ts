@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseCompactionJson } from '../src/agent/compaction';
 import { hydrateHistory } from '../src/agent/runner';
 import { parseAllowedUserIds } from '../src/config/env';
 import { buildSafeFtsQuery } from '../src/db/queries';
@@ -206,5 +207,22 @@ describe('hydrateHistory', () => {
       content: '{"ok":1}',
       tool_call_id: 'call_1',
     });
+  });
+});
+
+describe('parseCompactionJson', () => {
+  it('parses json wrapped in markdown fences', () => {
+    const parsed = parseCompactionJson(
+      '```json\n{"topic":"Настройка бота","episode_summary":"Обсудили память","rolling_summary":"Настроили бота и память"}\n```',
+    );
+    expect(parsed.topic).toBe('Настройка бота');
+    expect(parsed.episodeSummary).toBe('Обсудили память');
+    expect(parsed.rollingSummary).toBe('Настроили бота и память');
+  });
+
+  it('falls back gracefully on non-json output', () => {
+    const parsed = parseCompactionJson('Краткая сводка без JSON');
+    expect(parsed.topic).toBe('Диалог');
+    expect(parsed.episodeSummary).toBe('Краткая сводка без JSON');
   });
 });

@@ -1,4 +1,6 @@
 import type {
+  ChatSummaryRow,
+  ConversationEpisodeRow,
   MemoryRow,
   MessageRow,
   NoteRow,
@@ -78,7 +80,41 @@ export async function appendMessage(
 }
 
 export async function clearMessages(db: D1Database, chatId: number): Promise<void> {
-  await db.prepare('DELETE FROM messages WHERE chat_id = ?').bind(chatId).run();
+  await Promise.all([
+    db.prepare('DELETE FROM messages WHERE chat_id = ?').bind(chatId).run(),
+    db.prepare('DELETE FROM chat_summaries WHERE chat_id = ?').bind(chatId).run(),
+  ]);
+}
+
+export async function getMessagesForSummarization(
+  db: D1Database,
+  chatId: number,
+  keepRecent = 14,
+): Promise<MessageRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, chat_id, role, content, tool_calls_json, tool_call_id, created_at
+       FROM messages
+       WHERE chat_id = ?
+         AND id NOT IN (
+           SELECT id FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?
+         )
+       ORDER BY id ASC`,
+    )
+    .bind(chatId, chatId, keepRecent)
+    .all<MessageRow>();
+  return results;
+}
+
+export async function deleteMessagesUpToId(
+  db: D1Database,
+  chatId: number,
+  maxId: number,
+): Promise<void> {
+  await db
+    .prepare('DELETE FROM messages WHERE chat_id = ? AND id <= ?')
+    .bind(chatId, maxId)
+    .run();
 }
 
 export async function pruneOldMessages(
@@ -543,4 +579,106 @@ export async function setUserModel(
     )
     .bind(userId, modelOverride, Date.now())
     .run();
+}
+
+/* ---------------- Chat Summaries & Episodic Archive ---------------- */
+
+export async function getChatSummary(
+  db: D1Database,
+  chatId: number,
+): Promise<ChatSummaryRow | null> {
+  return db
+    .prepare('SELECT * FROM chat_summaries WHERE chat_id = ?')
+    .bind(chatId)
+    .first<ChatSummaryRow>();
+}
+
+export async function upsertChatSummary(
+  db: D1Database,
+  chatId: number,
+  summary: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO chat_summaries (chat_id, summary, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (chat_id) DO UPDATE SET
+         summary = excluded.summary,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(chatId, summary.trim(), Date.now())
+    .run();
+}
+
+export async function createEpisode(
+  db: D1Database,
+  params: {
+    chatId: number;
+    userId: number;
+    topic: string;
+    summary: string;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      'INSERT INTO conversation_episodes (chat_id, user_id, topic, summary, created_at) VALUES (?, ?, ?, ?, ?)',
+    )
+    .bind(
+      params.chatId,
+      params.userId,
+      params.topic.trim(),
+      params.summary.trim(),
+      Date.now(),
+    )
+    .run();
+}
+
+export async function searchEpisodes(
+  db: D1Database,
+  userId: number,
+  query: string,
+  limit = 8,
+): Promise<ConversationEpisodeRow[]> {
+  const ftsQuery = buildSafeFtsQuery(query);
+  if (ftsQuery) {
+    try {
+      const { results } = await db
+        .prepare(
+          `SELECT e.* FROM conversation_episodes e
+           JOIN episodes_fts fts ON e.id = fts.rowid
+           WHERE e.user_id = ? AND episodes_fts MATCH ?
+           ORDER BY bm25(episodes_fts) LIMIT ?`,
+        )
+        .bind(userId, ftsQuery, limit)
+        .all<ConversationEpisodeRow>();
+      if (results.length > 0) return results;
+    } catch {
+      // Fall back to LIKE search
+    }
+  }
+
+  const pattern = `%${query.trim().toLowerCase()}%`;
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM conversation_episodes
+       WHERE user_id = ? AND (LOWER(topic) LIKE ? OR LOWER(summary) LIKE ?)
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .bind(userId, pattern, pattern, limit)
+    .all<ConversationEpisodeRow>();
+  return results;
+}
+
+export async function listRecentEpisodes(
+  db: D1Database,
+  userId: number,
+  limit = 8,
+): Promise<ConversationEpisodeRow[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT * FROM conversation_episodes WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+    )
+    .bind(userId, limit)
+    .all<ConversationEpisodeRow>();
+  return results;
 }

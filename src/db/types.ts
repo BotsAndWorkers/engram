@@ -44,3 +44,18 @@ export interface UserSettingsRow {
   model_override: string | null;
   updated_at: number;
 }
+
+export interface ChatSummaryRow {
+  chat_id: number;
+  summary: string;
+  updated_at: number;
+}
+
+export interface ConversationEpisodeRow {
+  id: number;
+  chat_id: number;
+  user_id: number;
+  topic: string;
+  summary: string;
+  created_at: number;
+}

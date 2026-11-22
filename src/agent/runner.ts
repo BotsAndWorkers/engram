@@ -1,10 +1,10 @@
 import type { AppEnv } from '../config/env';
 import {
   appendMessage,
+  getChatSummary,
   getRecentMessages,
   getUserSettings,
   listMemories,
-  pruneOldMessages,
 } from '../db/queries';
 import type { MemoryRow, MessageRow } from '../db/types';
 import { createLLMProvider } from '../llm/factory';
@@ -13,6 +13,7 @@ import type { TelegramClient } from '../telegram/client';
 import { markdownToTelegramHtml } from '../telegram/format';
 import type { InlineKeyboardButton } from '../telegram/types';
 import { executeTool, getToolDefinitions } from '../tools/registry';
+import { compactConversationIfNeeded } from './compaction';
 
 const MAX_TOOL_ITERATIONS = 5;
 const HISTORY_WINDOW = 14;
@@ -31,6 +32,7 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   delete_reminder: 'Удаляю напоминание...',
   remember_fact: 'Запоминаю...',
   forget_fact: 'Обновляю память...',
+  search_past_conversations: 'Ищу в архиве диалогов...',
   fetch_url: 'Читаю страницу по ссылке...',
 };
 
@@ -65,11 +67,16 @@ function formatCurrentDateTimeWithOffset(timezone: string): string {
 export function buildSystemPrompt(
   timezone: string,
   memories: MemoryRow[],
+  rollingSummary?: string | null,
 ): string {
   const memoryBlock =
     memories.length > 0
       ? memories.map((m) => `- ${m.key}: ${m.value}`).join('\n')
       : '(пока пусто)';
+
+  const summaryBlock = rollingSummary
+    ? `\nRecent conversation context (compressed summary):\n${rollingSummary}\n`
+    : '';
 
   return [
     'You are Engram, a loyal, intelligent, and slightly witty personal AI assistant in the spirit of Jarvis.',
@@ -81,11 +88,12 @@ export function buildSystemPrompt(
     '',
     'Known facts about the user (long-term memory):',
     memoryBlock,
-    '',
+    summaryBlock,
     'Guidelines:',
     '- Act autonomously with tools whenever the user implies an action: saving ideas/links/notes, searching past notes, scheduling or managing reminders, remembering personal facts, or reading a URL.',
     '- Proactively call remember_fact when the user mentions stable personal details, projects, preferences, or habits worth keeping.',
     '- When the user asks about past notes or saved information, call search_notes or list_recent_notes first instead of guessing.',
+    '- When the user asks what you discussed previously or asks to recall an older topic, call search_past_conversations.',
     '- When creating a reminder, convert relative dates like "завтра в 10:00" or "через 30 минут" accurately using the current local date & time above.',
     '- Never mention internal tool names or parameter names (such as save_note, search_notes, due_at_iso, tags) to the user. Describe your capabilities in natural human terms.',
     '- Format replies with clean Markdown (**bold** for headings and key phrases, bullet lists, > blockquotes for highlights, and `code` for commands/values) so they render cleanly in Telegram.',
@@ -158,10 +166,11 @@ export async function runAgentTurn(params: {
 
   await telegram.sendChatAction(chatId, 'typing');
 
-  const [settings, memories, historyRows] = await Promise.all([
+  const [settings, memories, historyRows, chatSummary] = await Promise.all([
     getUserSettings(env.DB, userId),
     listMemories(env.DB, userId),
     getRecentMessages(env.DB, chatId, HISTORY_WINDOW),
+    getChatSummary(env.DB, chatId),
   ]);
 
   const timezone = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
@@ -175,7 +184,10 @@ export async function runAgentTurn(params: {
   });
 
   const conversation: ChatMessage[] = [
-    { role: 'system', content: buildSystemPrompt(timezone, memories) },
+    {
+      role: 'system',
+      content: buildSystemPrompt(timezone, memories, chatSummary?.summary),
+    },
     ...hydrateHistory(historyRows),
     { role: 'user', content: userText },
   ];
@@ -311,8 +323,6 @@ export async function runAgentTurn(params: {
     content: finalText,
   });
 
-  await pruneOldMessages(env.DB, chatId, 60);
-
   const actionRow: InlineKeyboardButton[] = [];
   if (lastSavedNoteId !== null) {
     actionRow.push({
@@ -347,4 +357,15 @@ export async function runAgentTurn(params: {
   } else {
     await telegram.sendMessage(chatId, formattedFinal, replyOptions);
   }
+
+  // Run background compaction after the reply is already delivered
+  await compactConversationIfNeeded({
+    env,
+    userId,
+    chatId,
+    keepRecent: HISTORY_WINDOW,
+    modelOverride: settings?.model_override,
+  }).catch((err) => {
+    console.error('Conversation compaction failed', err);
+  });
 }

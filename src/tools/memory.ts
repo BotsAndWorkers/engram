@@ -1,4 +1,10 @@
-import { deleteMemory, upsertMemory } from '../db/queries';
+import {
+  deleteMemory,
+  listRecentEpisodes,
+  searchEpisodes,
+  upsertMemory,
+} from '../db/queries';
+import { formatLocalTime } from './reminders';
 import type { RegisteredTool } from './types';
 
 export const memoryTools: RegisteredTool[] = [
@@ -58,6 +64,39 @@ export const memoryTools: RegisteredTool[] = [
 
       const deleted = await deleteMemory(ctx.db, ctx.userId, key);
       return { deleted, key };
+    },
+  },
+  {
+    definition: {
+      name: 'search_past_conversations',
+      description:
+        'Search the episodic archive of past conversations by topic or keywords. Use this whenever the user asks what you discussed previously or asks to recall an older conversation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description:
+              'Keywords or topic to search in past conversations (leave empty to list recent conversation episodes)',
+          },
+        },
+      },
+    },
+    async execute(args, ctx) {
+      const query = String(args.query ?? '').trim();
+      const episodes = query
+        ? await searchEpisodes(ctx.db, ctx.userId, query, 8)
+        : await listRecentEpisodes(ctx.db, ctx.userId, 8);
+
+      return {
+        count: episodes.length,
+        episodes: episodes.map((ep) => ({
+          id: ep.id,
+          topic: ep.topic,
+          summary: ep.summary,
+          date_local: formatLocalTime(ep.created_at, ctx.timezone),
+        })),
+      };
     },
   },
 ];

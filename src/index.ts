@@ -8,7 +8,28 @@ import { isUserAllowed, verifySecretToken } from './telegram/auth';
 import { handleCallbackQuery } from './telegram/callbacks';
 import { TelegramClient } from './telegram/client';
 import { handleSlashCommand } from './telegram/commands';
-import type { TelegramUpdate } from './telegram/types';
+import type { TelegramForwardOrigin, TelegramUpdate } from './telegram/types';
+
+function formatForwardPrefix(origin: TelegramForwardOrigin | undefined): string {
+  if (!origin) return '';
+  if (origin.type === 'channel' && origin.chat?.title) {
+    const handle = origin.chat.username ? ` (@${origin.chat.username})` : '';
+    return `[Переслано из канала "${origin.chat.title}"${handle}]:\n`;
+  }
+  if (origin.type === 'chat' && origin.sender_chat?.title) {
+    return `[Переслано из чата "${origin.sender_chat.title}"]:\n`;
+  }
+  if (origin.type === 'user' && origin.sender_user) {
+    const name = origin.sender_user.username
+      ? `${origin.sender_user.first_name} (@${origin.sender_user.username})`
+      : origin.sender_user.first_name;
+    return `[Переслано от ${name}]:\n`;
+  }
+  if (origin.type === 'hidden_user' && origin.sender_user_name) {
+    return `[Переслано от ${origin.sender_user_name}]:\n`;
+  }
+  return '[Пересланное сообщение]:\n';
+}
 
 const app = new Hono<{ Bindings: AppEnv }>();
 
@@ -106,6 +127,11 @@ async function handleUpdate(
       text: userText,
     });
     if (handledCommand) return;
+
+    const forwardPrefix = formatForwardPrefix(msg.forward_origin);
+    if (forwardPrefix) {
+      userText = `${forwardPrefix}${userText}`;
+    }
 
     await runAgentTurn({
       env,
