@@ -103,7 +103,9 @@ async function handleUpdate(
 
     if (msg.photo && msg.photo.length > 0) {
       await telegram.sendChatAction(chatId, 'typing');
-      const bestPhoto = msg.photo[msg.photo.length - 1];
+      const bestPhoto =
+        msg.photo.find((p) => p.width >= 600) ??
+        msg.photo[msg.photo.length - 1];
       const imageBuffer = await telegram.getFileBytes(bestPhoto.file_id);
       const visionModel =
         env.WORKERS_AI_VISION_MODEL ||

@@ -251,7 +251,7 @@ export async function runAgentTurn(params: {
   for (let step = 0; step < MAX_TOOL_ITERATIONS; step += 1) {
     await telegram.sendChatAction(chatId, 'typing');
 
-    const response = llm.chatStream
+    let response = llm.chatStream
       ? await llm.chatStream(conversation, tools, async (partial) => {
           if (partial.trim().length >= 8) {
             hasStreamedText = true;
@@ -259,6 +259,10 @@ export async function runAgentTurn(params: {
           }
         })
       : await llm.chat(conversation, tools);
+
+    if (!response.content && response.toolCalls.length === 0 && llm.chatStream) {
+      response = await llm.chat(conversation, tools);
+    }
 
     if (response.toolCalls.length === 0) {
       finalText = response.content;
