@@ -272,10 +272,51 @@ export function normalizeWorkersAIResponse(
     });
   }
 
+  let cleanContent = content.trim();
+  if (toolCalls.length === 0 && cleanContent) {
+    const extracted = extractInlineToolCall(cleanContent);
+    if (extracted) {
+      cleanContent = extracted.cleanText;
+      toolCalls.push(extracted.toolCall);
+    }
+  }
+
   return {
-    content: content.trim(),
+    content: cleanContent,
     toolCalls,
   };
+}
+
+/**
+ * Some open-weight models emit a raw JSON tool call inline at the end of text
+ * instead of structured tool_calls. Extract it so it executes cleanly and
+ * never leaks raw JSON to the user.
+ */
+export function extractInlineToolCall(
+  text: string,
+): { cleanText: string; toolCall: ToolCall } | null {
+  const match = text.match(
+    /\{\s*"name"\s*:\s*"([a-z0-9_]+)"\s*,\s*"(?:parameters|arguments)"\s*:\s*(\{[\s\S]*\})\s*\}\s*$/i,
+  );
+  if (!match) return null;
+
+  const toolName = match[1];
+  const argsRaw = match[2];
+  try {
+    const parsedArgs = JSON.parse(argsRaw) as Record<string, unknown>;
+    const cleanText = text.slice(0, match.index).trim();
+    return {
+      cleanText,
+      toolCall: {
+        id: `inline_${Date.now()}`,
+        name: toolName,
+        arguments:
+          typeof parsedArgs === 'object' && parsedArgs !== null ? parsedArgs : {},
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseToolArguments(

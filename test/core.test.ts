@@ -3,7 +3,10 @@ import { parseCompactionJson } from '../src/agent/compaction';
 import { hydrateHistory } from '../src/agent/runner';
 import { parseAllowedUserIds } from '../src/config/env';
 import { buildSafeFtsQuery } from '../src/db/queries';
-import { normalizeWorkersAIResponse } from '../src/llm/workers-ai';
+import {
+  extractInlineToolCall,
+  normalizeWorkersAIResponse,
+} from '../src/llm/workers-ai';
 import { verifySecretToken } from '../src/telegram/auth';
 import { splitTelegramMessage } from '../src/telegram/client';
 import { markdownToTelegramHtml } from '../src/telegram/format';
@@ -226,5 +229,17 @@ describe('parseCompactionJson', () => {
     expect(parsed.topic).toBe('Диалог');
     expect(parsed.episodeSummary).toBe('Краткая сводка без JSON');
     expect(parsed.facts).toEqual([]);
+  });
+
+  it('extracts inline JSON tool call emitted as plain text', () => {
+    const res = normalizeWorkersAIResponse({
+      response:
+        'Проверю историю. {"name": "search_past_conversations", "parameters": {"query": ""}}',
+    });
+    expect(res.content).toBe('Проверю историю.');
+    expect(res.toolCalls).toHaveLength(1);
+    expect(res.toolCalls[0].name).toBe('search_past_conversations');
+    expect(res.toolCalls[0].arguments).toEqual({ query: '' });
+    expect(extractInlineToolCall('Обычный ответ без JSON')).toBeNull();
   });
 });
