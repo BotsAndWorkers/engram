@@ -5,6 +5,7 @@ import {
   getChatSummary,
   getMessagesForSummarization,
   upsertChatSummary,
+  upsertMemory,
 } from '../db/queries';
 import type { MessageRow } from '../db/types';
 import { createLLMProvider } from '../llm/factory';
@@ -12,10 +13,16 @@ import { createLLMProvider } from '../llm/factory';
 const MIN_MESSAGES_TO_COMPACT = 6;
 const MAX_TRANSCRIPT_CHARS = 5000;
 
+export interface ExtractedFact {
+  key: string;
+  value: string;
+}
+
 export interface CompactionOutput {
   topic: string;
   episodeSummary: string;
   rollingSummary: string;
+  facts: ExtractedFact[];
 }
 
 export function parseCompactionJson(raw: string): CompactionOutput {
@@ -30,6 +37,7 @@ export function parseCompactionJson(raw: string): CompactionOutput {
       topic?: unknown;
       episode_summary?: unknown;
       rolling_summary?: unknown;
+      facts?: unknown;
     };
 
     const topic =
@@ -45,13 +53,32 @@ export function parseCompactionJson(raw: string): CompactionOutput {
         ? parsed.rolling_summary.trim().slice(0, 1500)
         : episodeSummary;
 
-    return { topic, episodeSummary, rollingSummary };
+    const facts: ExtractedFact[] = [];
+    if (Array.isArray(parsed.facts)) {
+      for (const item of parsed.facts) {
+        if (
+          item &&
+          typeof item === 'object' &&
+          typeof (item as { key?: unknown }).key === 'string' &&
+          typeof (item as { value?: unknown }).value === 'string'
+        ) {
+          const key = (item as { key: string }).key.trim().slice(0, 64);
+          const value = (item as { value: string }).value.trim().slice(0, 300);
+          if (key && value) {
+            facts.push({ key, value });
+          }
+        }
+      }
+    }
+
+    return { topic, episodeSummary, rollingSummary, facts };
   } catch {
     const fallback = cleaned.slice(0, 1200) || 'Краткая сводка разговора.';
     return {
       topic: 'Диалог',
       episodeSummary: fallback,
       rollingSummary: fallback,
+      facts: [],
     };
   }
 }
@@ -102,10 +129,11 @@ export async function compactConversationIfNeeded(params: {
   const llm = createLLMProvider(env, modelOverride);
 
   const prompt = [
-    'Summarize the conversation segment below into strict JSON with exactly 3 string keys (in Russian):',
+    'Summarize the conversation segment below into strict JSON with 4 keys (text in Russian):',
     '1. "topic": short 3-7 word title of what was discussed.',
     '2. "episode_summary": concise summary of this specific segment (key decisions, questions, facts, outcomes).',
     '3. "rolling_summary": updated combined summary merging the previous summary (if any) with this segment, up to 1200 characters.',
+    '4. "facts": array of {"key": "snake_case_id", "value": "concise personal fact"} for any new durable personal facts about the user revealed in this segment (empty array [] if none).',
     '',
     existingSummary?.summary
       ? `Previous rolling summary:\n${existingSummary.summary}\n`
@@ -136,6 +164,9 @@ export async function compactConversationIfNeeded(params: {
       summary: parsed.episodeSummary,
     }),
     upsertChatSummary(env.DB, chatId, parsed.rollingSummary),
+    ...parsed.facts.slice(0, 5).map((fact) =>
+      upsertMemory(env.DB, userId, fact.key, fact.value),
+    ),
   ]);
 
   await deleteMessagesUpToId(env.DB, chatId, maxMessageId);

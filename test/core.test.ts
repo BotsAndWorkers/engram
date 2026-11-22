@@ -211,18 +211,20 @@ describe('hydrateHistory', () => {
 });
 
 describe('parseCompactionJson', () => {
-  it('parses json wrapped in markdown fences', () => {
+  it('parses json wrapped in markdown fences including extracted facts', () => {
     const parsed = parseCompactionJson(
-      '```json\n{"topic":"Настройка бота","episode_summary":"Обсудили память","rolling_summary":"Настроили бота и память"}\n```',
+      '```json\n{"topic":"Настройка бота","episode_summary":"Обсудили память","rolling_summary":"Настроили бота и память","facts":[{"key":"bot_name","value":"Engram"}]}\n```',
     );
     expect(parsed.topic).toBe('Настройка бота');
     expect(parsed.episodeSummary).toBe('Обсудили память');
     expect(parsed.rollingSummary).toBe('Настроили бота и память');
+    expect(parsed.facts).toEqual([{ key: 'bot_name', value: 'Engram' }]);
   });
 
   it('falls back gracefully on non-json output', () => {
     const parsed = parseCompactionJson('Краткая сводка без JSON');
     expect(parsed.topic).toBe('Диалог');
     expect(parsed.episodeSummary).toBe('Краткая сводка без JSON');
+    expect(parsed.facts).toEqual([]);
   });
 });
