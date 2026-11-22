@@ -10,6 +10,7 @@ import type { MemoryRow, MessageRow } from '../db/types';
 import { createLLMProvider } from '../llm/factory';
 import type { ChatMessage, ToolCall } from '../llm/types';
 import type { TelegramClient } from '../telegram/client';
+import type { InlineKeyboardButton } from '../telegram/types';
 import { executeTool, getToolDefinitions } from '../tools/registry';
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -53,8 +54,9 @@ export function buildSystemPrompt(
       : '(пока пусто)';
 
   return [
-    'You are Engram, a concise and practical personal AI assistant and knowledge base in Telegram.',
-    'Reply in the same language as the user (usually Russian). Do not use emojis.',
+    'You are Engram, a loyal, intelligent, and slightly witty personal AI assistant in the spirit of Jarvis.',
+    'Communicate naturally and warmly, like a sharp personal butler and chief of staff — polite, calm, attentive, and concise, without robotic boilerplate or emojis.',
+    'Always reply in the same language as the user (usually Russian).',
     `Current local date & time: ${formatCurrentDateTimeWithOffset(timezone)}`,
     `User timezone: ${timezone}`,
     '',
@@ -62,10 +64,11 @@ export function buildSystemPrompt(
     memoryBlock,
     '',
     'Guidelines:',
-    '- Use tools whenever the user asks to save/search/update/delete notes, manage reminders, remember/forget facts, or read a URL.',
+    '- Act autonomously with tools whenever the user implies an action: saving ideas/links/notes, searching past notes, scheduling or managing reminders, remembering personal facts, or reading a URL.',
+    '- Proactively call remember_fact when the user mentions stable personal details, projects, preferences, or habits worth keeping.',
     '- When the user asks about past notes or saved information, call search_notes or list_recent_notes first instead of guessing.',
     '- When creating a reminder, convert relative dates like "завтра в 10:00" or "через 30 минут" accurately using the current local date & time above.',
-    '- Keep answers clear, structured, and free of filler.',
+    '- Keep replies natural, clear, and to the point.',
   ].join('\n');
 }
 
@@ -123,6 +126,9 @@ export async function runAgentTurn(params: {
   ];
 
   let finalText = '';
+  let lastSavedNoteId: number | null = null;
+  let touchedNotes = false;
+  let touchedReminders = false;
 
   for (let step = 0; step < MAX_TOOL_ITERATIONS; step += 1) {
     await telegram.sendChatAction(chatId, 'typing');
@@ -156,6 +162,26 @@ export async function runAgentTurn(params: {
         timezone,
       });
 
+      if (tc.name === 'save_note' || tc.name === 'update_note') {
+        touchedNotes = true;
+        try {
+          const parsed = JSON.parse(toolOutput) as { id?: number };
+          if (typeof parsed.id === 'number') {
+            lastSavedNoteId = parsed.id;
+          }
+        } catch {
+          // ignore parse errors
+        }
+      } else if (tc.name === 'search_notes' || tc.name === 'list_recent_notes') {
+        touchedNotes = true;
+      } else if (
+        tc.name === 'create_reminder' ||
+        tc.name === 'list_reminders' ||
+        tc.name === 'complete_reminder'
+      ) {
+        touchedReminders = true;
+      }
+
       const toolMsg: ChatMessage = {
         role: 'tool',
         content: toolOutput,
@@ -188,5 +214,28 @@ export async function runAgentTurn(params: {
   });
 
   await pruneOldMessages(env.DB, chatId, 60);
-  await telegram.sendMessage(chatId, finalText);
+
+  const actionRow: InlineKeyboardButton[] = [];
+  if (lastSavedNoteId !== null) {
+    actionRow.push({
+      text: `Открыть заметку #${lastSavedNoteId}`,
+      callback_data: `note:view:${lastSavedNoteId}:0`,
+    });
+  } else if (touchedNotes) {
+    actionRow.push({ text: 'Все заметки', callback_data: 'menu:notes:0' });
+  }
+  if (touchedReminders) {
+    actionRow.push({
+      text: 'Напоминания',
+      callback_data: 'menu:rems:pending',
+    });
+  }
+
+  await telegram.sendMessage(
+    chatId,
+    finalText,
+    actionRow.length > 0
+      ? { replyMarkup: { inline_keyboard: [actionRow] } }
+      : undefined,
+  );
 }
