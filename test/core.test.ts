@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseCompactionJson } from '../src/agent/compaction';
-import { hydrateHistory } from '../src/agent/runner';
+import { buildSystemPrompt, hydrateHistory } from '../src/agent/runner';
 import { parseAllowedUserIds } from '../src/config/env';
 import { buildSafeFtsQuery } from '../src/db/queries';
 import {
@@ -241,5 +241,18 @@ describe('parseCompactionJson', () => {
     expect(res.toolCalls[0].name).toBe('search_past_conversations');
     expect(res.toolCalls[0].arguments).toEqual({ query: '' });
     expect(extractInlineToolCall('Обычный ответ без JSON')).toBeNull();
+  });
+
+  it('builds structured XML system prompt with memory and summary', () => {
+    const prompt = buildSystemPrompt(
+      'Asia/Novosibirsk',
+      [{ id: 1, user_id: 1, key: 'city', value: 'Novosibirsk', updated_at: 1 }],
+      'Обсудили планы на неделю.',
+    );
+    expect(prompt).toContain('<role>');
+    expect(prompt).toContain('<long_term_memory>');
+    expect(prompt).toContain('city: Novosibirsk');
+    expect(prompt).toContain('<recent_summary>');
+    expect(prompt).toContain('<rules>');
   });
 });

@@ -20,6 +20,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "engram-notes"
+    }
+  ],
   "triggers": {
     "crons": ["* * * * *"]
   },
@@ -27,6 +33,8 @@
     "DEFAULT_TIMEZONE": "Asia/Novosibirsk",
     "LLM_PROVIDER": "workers-ai",
     "WORKERS_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "WORKERS_AI_WHISPER_MODEL": "@cf/openai/whisper"
+    "WORKERS_AI_WHISPER_MODEL": "@cf/openai/whisper",
+    "WORKERS_AI_EMBEDDING_MODEL": "@cf/baai/bge-m3",
+    "WORKERS_AI_VISION_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct"
   }
 }

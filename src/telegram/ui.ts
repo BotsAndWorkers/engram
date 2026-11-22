@@ -1,5 +1,7 @@
 import type { AppEnv } from '../config/env';
 import {
+  getListItems,
+  getListNames,
   getNoteById,
   getUserSettings,
   getUserStats,
@@ -32,6 +34,17 @@ export const TIMEZONE_PRESETS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'UTC', label: 'UTC (+0)' },
 ];
 
+export const BRIEFING_PRESETS: ReadonlyArray<{
+  hour: number | null;
+  label: string;
+}> = [
+  { hour: null, label: 'Выкл' },
+  { hour: 8, label: '08:00' },
+  { hour: 9, label: '09:00' },
+  { hour: 10, label: '10:00' },
+  { hour: 20, label: '20:00' },
+];
+
 const NOTES_PAGE_SIZE = 5;
 
 export async function buildHomeScreen(
@@ -53,11 +66,11 @@ export async function buildHomeScreen(
   const text = [
     'Engram — личный AI-ассистент и база знаний',
     '',
-    `Заметок: ${stats.notes} | Напоминаний: ${stats.pendingReminders} | Фактов: ${stats.memories}`,
+    `Заметок: ${stats.notes} | Напоминаний: ${stats.pendingReminders} | Списки: ${stats.openListItems} | Фактов: ${stats.memories}`,
     `Модель: ${modelLabel}`,
     `Часовой пояс: ${timezone}`,
     '',
-    'Можно просто писать текст, кидать ссылки или отправлять голосовые.',
+    'Можно писать текст, кидать ссылки, голосовые, фото или пересылать посты.',
   ].join('\n');
 
   const replyMarkup: InlineKeyboardMarkup = {
@@ -70,8 +83,12 @@ export async function buildHomeScreen(
         },
       ],
       [
+        { text: `Списки (${stats.openListItems})`, callback_data: 'menu:lists:' },
         { text: `Память (${stats.memories})`, callback_data: 'menu:memory' },
+      ],
+      [
         { text: 'Настройки', callback_data: 'menu:settings' },
+        { text: 'Экспорт (.md)', callback_data: 'menu:export' },
       ],
       [
         { text: 'Справка', callback_data: 'menu:help' },
@@ -348,6 +365,7 @@ export async function buildSettingsScreen(
     env.WORKERS_AI_MODEL ||
     '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   const currentTz = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
+  const currentBriefing = settings?.briefing_hour ?? null;
 
   const modelButtons: InlineKeyboardButton[][] = [];
   for (let i = 0; i < MODEL_PRESETS.length; i += 2) {
@@ -377,13 +395,24 @@ export async function buildSettingsScreen(
     tzButtons.push(row);
   }
 
+  const briefRow: InlineKeyboardButton[] = BRIEFING_PRESETS.map((b, idx) => ({
+    text: b.hour === currentBriefing ? `[*] ${b.label}` : b.label,
+    callback_data: `set:brief:${idx}`,
+  }));
+
+  const briefLabel =
+    currentBriefing === null
+      ? 'выключен'
+      : `${String(currentBriefing).padStart(2, '0')}:00`;
+
   const text = [
     'Настройки',
     '',
     `Модель: ${currentModel}`,
     `Часовой пояс: ${currentTz}`,
+    `Дайджест дня: ${briefLabel}`,
     '',
-    'Выбери модель или часовой пояс кнопками ниже (любую другую модель можно задать через /model <id>):',
+    'Выбери модель, часовой пояс или время ежедневной сводки:',
   ].join('\n');
 
   return {
@@ -392,8 +421,76 @@ export async function buildSettingsScreen(
       inline_keyboard: [
         ...modelButtons,
         ...tzButtons,
+        briefRow,
         [{ text: 'В главное меню', callback_data: 'menu:home' }],
       ],
+    },
+  };
+}
+
+export async function buildListsScreen(
+  env: AppEnv,
+  userId: number,
+  selectedList?: string,
+): Promise<ScreenView> {
+  const listNames = await getListNames(env.DB, userId);
+
+  if (listNames.length === 0) {
+    return {
+      text: 'Списков пока нет. Напиши в чат, например: "добавь молоко и кофе в список покупок".',
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: 'В главное меню', callback_data: 'menu:home' }],
+        ],
+      },
+    };
+  }
+
+  const activeList =
+    selectedList && listNames.includes(selectedList)
+      ? selectedList
+      : listNames[0];
+
+  const items = await getListItems(env.DB, userId, activeList);
+
+  const tabRow: InlineKeyboardButton[] = listNames.slice(0, 4).map((name) => ({
+    text: name === activeList ? `[*] ${name}` : name,
+    callback_data: `menu:lists:${name.slice(0, 24)}`,
+  }));
+
+  const lines = items.map(
+    (item) => `${item.done ? '[x]' : '[ ]'} ${item.text}`,
+  );
+
+  const itemButtons: InlineKeyboardButton[][] = items.slice(0, 8).map((item) => {
+    const short =
+      item.text.length > 32 ? `${item.text.slice(0, 32)}...` : item.text;
+    return [
+      {
+        text: `${item.done ? '[x]' : '[ ]'} ${short}`,
+        callback_data: `list:toggle:${item.id}:${activeList.slice(0, 20)}`,
+      },
+    ];
+  });
+
+  const hasDone = items.some((i) => Boolean(i.done));
+  const footerRow: InlineKeyboardButton[] = [];
+  if (hasDone) {
+    footerRow.push({
+      text: 'Убрать выполненные',
+      callback_data: `list:clear:${activeList.slice(0, 24)}`,
+    });
+  }
+  footerRow.push({ text: 'В главное меню', callback_data: 'menu:home' });
+
+  return {
+    text: [
+      `Список "${activeList}":`,
+      '',
+      ...(lines.length > 0 ? lines : ['(пусто)']),
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [tabRow, ...itemButtons, footerRow],
     },
   };
 }
@@ -407,7 +504,9 @@ export function buildHelpScreen(): ScreenView {
       '/menu — главное интерактивное меню',
       '/notes [запрос] — заметки или поиск',
       '/reminders — список напоминаний',
+      '/lists — интерактивные списки',
       '/memory — долгосрочная память',
+      '/export — экспорт всех заметок в Markdown',
       '/model [id | reset] — выбор модели AI',
       '/tz [Asia/Novosibirsk] — часовой пояс',
       '/clear — очистить историю диалога',

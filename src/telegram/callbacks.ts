@@ -1,22 +1,28 @@
 import type { AppEnv } from '../config/env';
 import {
+  clearDoneListItems,
   clearMessages,
   completeReminder,
   deleteMemoryById,
   deleteNote,
   deleteReminder,
   getUserSettings,
+  setUserBriefingHour,
   setUserModel,
   setUserTimezone,
   snoozeReminder,
+  toggleListItem,
 } from '../db/queries';
 import { formatLocalTime } from '../tools/reminders';
 import type { TelegramClient } from './client';
+import { exportNotesAsMarkdown } from './commands';
 import type { TelegramCallbackQuery } from './types';
 import {
+  BRIEFING_PRESETS,
   buildClearConfirmScreen,
   buildHelpScreen,
   buildHomeScreen,
+  buildListsScreen,
   buildMemoryScreen,
   buildNoteDetailScreen,
   buildNotesScreen,
@@ -85,6 +91,24 @@ export async function handleCallbackQuery(
           messageId,
           await buildRemindersScreen(env, userId, status),
         );
+        return;
+      }
+      case 'lists': {
+        const listName = parts[2] || undefined;
+        await telegram.answerCallbackQuery(query.id);
+        await renderScreen(
+          telegram,
+          chatId,
+          messageId,
+          await buildListsScreen(env, userId, listName),
+        );
+        return;
+      }
+      case 'export': {
+        await telegram.answerCallbackQuery(query.id, 'Готовлю экспорт...');
+        if (chatId) {
+          await exportNotesAsMarkdown(env, telegram, userId, chatId);
+        }
         return;
       }
       case 'memory': {
@@ -236,6 +260,61 @@ export async function handleCallbackQuery(
         messageId,
         await buildSettingsScreen(env, userId),
       );
+      return;
+    }
+
+    if (kind === 'brief' && BRIEFING_PRESETS[idx] && chatId) {
+      const preset = BRIEFING_PRESETS[idx];
+      await setUserBriefingHour(env.DB, userId, chatId, preset.hour);
+      await telegram.answerCallbackQuery(
+        query.id,
+        preset.hour === null
+          ? 'Дайджест выключен'
+          : `Дайджест в ${preset.label}`,
+      );
+      await renderScreen(
+        telegram,
+        chatId,
+        messageId,
+        await buildSettingsScreen(env, userId),
+      );
+      return;
+    }
+  }
+
+  if (scope === 'list') {
+    const action = parts[1];
+    if (action === 'toggle') {
+      const itemId = Number.parseInt(parts[2] ?? '', 10);
+      const listName = parts[3] || undefined;
+      if (Number.isFinite(itemId)) {
+        const updated = await toggleListItem(env.DB, userId, itemId);
+        await telegram.answerCallbackQuery(
+          query.id,
+          updated?.done ? 'Отмечено' : 'Снято',
+        );
+        await renderScreen(
+          telegram,
+          chatId,
+          messageId,
+          await buildListsScreen(env, userId, listName),
+        );
+      }
+      return;
+    }
+
+    if (action === 'clear') {
+      const listName = parts[2] ?? '';
+      if (listName) {
+        const count = await clearDoneListItems(env.DB, userId, listName);
+        await telegram.answerCallbackQuery(query.id, `Удалено: ${count}`);
+        await renderScreen(
+          telegram,
+          chatId,
+          messageId,
+          await buildListsScreen(env, userId, listName),
+        );
+      }
       return;
     }
   }

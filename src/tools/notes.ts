@@ -2,11 +2,81 @@ import {
   createNote,
   deleteNote,
   getNoteById,
+  getNotesByIds,
   listRecentNotes,
   searchNotes,
   updateNote,
 } from '../db/queries';
-import type { RegisteredTool } from './types';
+import type { NoteRow } from '../db/types';
+import { generateEmbeddingWithWorkersAI } from '../llm/workers-ai';
+import type { RegisteredTool, ToolContext } from './types';
+
+async function indexNoteVector(ctx: ToolContext, note: NoteRow): Promise<void> {
+  if (!ctx.ai || !ctx.vectorize) return;
+  try {
+    const model = ctx.embeddingModel || '@cf/baai/bge-m3';
+    const text = `${note.title}\n${note.tags}\n${note.content}`;
+    const values = await generateEmbeddingWithWorkersAI(ctx.ai, model, text);
+    if (!values) return;
+
+    await ctx.vectorize.upsert([
+      {
+        id: `note_${note.id}`,
+        values,
+        metadata: { userId: ctx.userId, noteId: note.id },
+      },
+    ]);
+  } catch (err) {
+    console.error('Vectorize upsert failed', err);
+  }
+}
+
+async function deleteNoteVector(ctx: ToolContext, noteId: number): Promise<void> {
+  if (!ctx.vectorize) return;
+  try {
+    await ctx.vectorize.deleteByIds([`note_${noteId}`]);
+  } catch (err) {
+    console.error('Vectorize delete failed', err);
+  }
+}
+
+async function semanticSearchNotes(
+  ctx: ToolContext,
+  query: string,
+  topK = 6,
+): Promise<NoteRow[]> {
+  if (!ctx.ai || !ctx.vectorize) return [];
+  try {
+    const model = ctx.embeddingModel || '@cf/baai/bge-m3';
+    const values = await generateEmbeddingWithWorkersAI(ctx.ai, model, query);
+    if (!values) return [];
+
+    const result = await ctx.vectorize.query(values, {
+      topK,
+      returnMetadata: 'all',
+    });
+
+    const ids: number[] = [];
+    for (const match of result.matches) {
+      if (match.score < 0.35) continue;
+      const meta = match.metadata as { userId?: number; noteId?: number } | undefined;
+      if (meta?.userId !== ctx.userId) continue;
+      const noteId =
+        typeof meta?.noteId === 'number'
+          ? meta.noteId
+          : Number.parseInt(match.id.replace('note_', ''), 10);
+      if (Number.isFinite(noteId)) ids.push(noteId);
+    }
+
+    if (ids.length === 0) return [];
+    const rows = await getNotesByIds(ctx.db, ctx.userId, ids);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return ids.map((id) => byId.get(id)).filter((r): r is NoteRow => Boolean(r));
+  } catch (err) {
+    console.error('Vectorize query failed', err);
+    return [];
+  }
+}
 
 export const noteTools: RegisteredTool[] = [
   {
@@ -44,6 +114,7 @@ export const noteTools: RegisteredTool[] = [
       }
 
       const note = await createNote(ctx.db, ctx.userId, title, content, tags);
+      await indexNoteVector(ctx, note);
       return {
         saved: true,
         id: note.id,
@@ -80,7 +151,18 @@ export const noteTools: RegisteredTool[] = [
         return { error: 'query is required.' };
       }
 
-      const notes = await searchNotes(ctx.db, ctx.userId, query, tag, 8);
+      const [ftsNotes, vectorNotes] = await Promise.all([
+        searchNotes(ctx.db, ctx.userId, query, tag, 8),
+        tag ? Promise.resolve([]) : semanticSearchNotes(ctx, query, 6),
+      ]);
+
+      const merged = new Map<number, NoteRow>();
+      for (const n of ftsNotes) merged.set(n.id, n);
+      for (const n of vectorNotes) {
+        if (!merged.has(n.id)) merged.set(n.id, n);
+      }
+      const notes = Array.from(merged.values()).slice(0, 8);
+
       return {
         count: notes.length,
         notes: notes.map((n) => ({
@@ -173,6 +255,7 @@ export const noteTools: RegisteredTool[] = [
         return { error: `Note #${id} not found.` };
       }
 
+      await indexNoteVector(ctx, updated);
       return {
         updated: true,
         id: updated.id,
@@ -203,6 +286,9 @@ export const noteTools: RegisteredTool[] = [
       }
 
       const deleted = await deleteNote(ctx.db, ctx.userId, id);
+      if (deleted) {
+        await deleteNoteVector(ctx, id);
+      }
       return { deleted, id };
     },
   },

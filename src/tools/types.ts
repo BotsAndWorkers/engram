@@ -5,6 +5,9 @@ export interface ToolContext {
   userId: number;
   chatId: number;
   timezone: string;
+  ai?: Ai;
+  vectorize?: VectorizeIndex;
+  embeddingModel?: string;
 }
 
 export interface RegisteredTool {

@@ -190,4 +190,38 @@ export class TelegramClient {
     }
     return res.arrayBuffer();
   }
+
+  async sendDocument(
+    chatId: number,
+    filename: string,
+    content: string,
+    caption?: string,
+  ): Promise<void> {
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append(
+      'document',
+      new Blob([content], { type: 'text/markdown;charset=utf-8' }),
+      filename,
+    );
+    if (caption) {
+      form.append('caption', caption);
+    }
+
+    const res = await fetch(`${this.baseUrl}/sendDocument`, {
+      method: 'POST',
+      body: form,
+    });
+
+    const json = (await res.json()) as {
+      ok: boolean;
+      description?: string;
+    };
+
+    if (!res.ok || !json.ok) {
+      throw new Error(
+        `Telegram API sendDocument failed (${res.status}): ${json.description ?? 'unknown error'}`,
+      );
+    }
+  }
 }

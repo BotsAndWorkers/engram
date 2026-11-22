@@ -42,7 +42,19 @@ export interface UserSettingsRow {
   user_id: number;
   timezone: string | null;
   model_override: string | null;
+  briefing_hour: number | null;
+  last_briefing_date: string | null;
+  chat_id: number | null;
   updated_at: number;
+}
+
+export interface ListItemRow {
+  id: number;
+  user_id: number;
+  list_name: string;
+  text: string;
+  done: number;
+  created_at: number;
 }
 
 export interface ChatSummaryRow {

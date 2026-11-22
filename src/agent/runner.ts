@@ -30,11 +30,15 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   list_reminders: 'Проверяю напоминания...',
   complete_reminder: 'Отмечаю напоминание выполненным...',
   delete_reminder: 'Удаляю напоминание...',
-  remember_fact: 'Запоминаю...',
-  forget_fact: 'Обновляю память...',
+  add_to_list: 'Обновляю список...',
+  get_list: 'Проверяю списки...',
+  toggle_list_item: 'Обновляю список...',
+  remove_list_item: 'Обновляю список...',
   search_past_conversations: 'Ищу в архиве диалогов...',
   fetch_url: 'Читаю страницу по ссылке...',
 };
+
+const SILENT_TOOLS = new Set(['remember_fact', 'forget_fact']);
 
 function formatCurrentDateTimeWithOffset(timezone: string): string {
   const now = new Date();
@@ -74,33 +78,43 @@ export function buildSystemPrompt(
       ? memories.map((m) => `- ${m.key}: ${m.value}`).join('\n')
       : '(пока пусто)';
 
-  const summaryBlock = rollingSummary
-    ? `\nRecent conversation context (compressed summary):\n${rollingSummary}\n`
+  const summarySection = rollingSummary
+    ? `\n<recent_summary>\n${rollingSummary}\n</recent_summary>\n`
     : '';
 
   return [
-    'You are Engram, a concise, sharp, and natural personal AI assistant.',
-    'Match response length to the user message: reply in 1-2 short sentences for greetings, casual chat, or simple confirmations; give detailed answers only when the topic genuinely requires depth.',
-    'Do not use emojis in routine replies. Use them rarely (at most 1-2 per message) only when they clearly mark a status, list item, or genuine emotion.',
-    'Always reply in the same language as the user (usually Russian).',
+    '<role>',
+    'You are Engram, a concise, sharp, and natural personal AI assistant in Telegram.',
+    'Reply in the same language as the user (usually Russian).',
+    'Match response length to the message: 1-2 short sentences for greetings, small talk, or confirmations; detailed structured answers only when the task requires depth.',
+    'Do not use emojis in routine replies; use at most 1-2 only when clearly marking a status or genuine emotion.',
+    '</role>',
+    '',
+    '<context>',
     `Current local date & time: ${formatCurrentDateTimeWithOffset(timezone)}`,
     `User timezone: ${timezone}`,
+    '</context>',
     '',
-    'Known facts about the user (long-term memory):',
+    '<long_term_memory>',
     memoryBlock,
-    summaryBlock,
-    'Guidelines:',
-    '- Separate personal facts from notes automatically without asking the user for special commands:',
-    '  * Personal facts (preferences, projects, habits, names, roles, goals) -> silently call remember_fact in the background.',
-    '  * Ideas, links, summaries, snippets, or reference info -> save as a note with save_note.',
-    '  * Casual remarks or slang (e.g. "по факту", "жиза", "ок", "понятно") -> just continue the natural conversation; do NOT lecture the user on how to save facts.',
-    '- When the user asks about past notes or saved information, call search_notes or list_recent_notes first instead of guessing.',
-    '- When the user asks what you discussed previously or asks to recall an older topic, call search_past_conversations.',
-    '- When creating a reminder, convert relative dates like "завтра в 10:00" or "через 30 минут" accurately using the current local date & time above.',
-    '- STRICT: Never mention internal function/tool names or parameter names (like remember_fact, save_note, key-value, due_at_iso) and never tell the user what phrases to say to trigger your tools.',
-    '- Format replies with clean Markdown (**bold** for headings and key phrases, bullet lists, > blockquotes for highlights, and `code` for commands/values) so they render cleanly in Telegram.',
-    '- Keep replies natural, clear, and to the point.',
-  ].join('\n');
+    '</long_term_memory>',
+    summarySection,
+    '<rules>',
+    '- Do not call any tool for greetings, small talk, jokes, or general knowledge questions.',
+    '- Separate personal facts, notes, and checklists automatically without asking for special commands:',
+    '  * Personal facts (preferences, projects, habits, names, roles, goals) -> silently call remember_fact.',
+    '  * Ideas, links, summaries, code, or reference info -> save with save_note.',
+    '  * Shopping items, movies, books, or quick todo items -> use add_to_list / get_list / toggle_list_item.',
+    '- Casual remarks or slang (e.g. "по факту", "жиза", "ок") are normal conversation, not a request to save data.',
+    '- Never invent missing tool parameters; ask a brief clarifying question or search first.',
+    '- When asked about saved notes or older conversations, call search_notes or search_past_conversations instead of guessing.',
+    '- For reminders, convert relative dates accurately using the current local date & time.',
+    '- Never mention internal tool or parameter names in your reply.',
+    '- Format replies with clean Markdown (**bold**, bullet lists, > quotes, `code`).',
+    '</rules>',
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
 }
 
 export function hydrateHistory(rows: MessageRow[]): ChatMessage[] {
@@ -223,6 +237,8 @@ export async function runAgentTurn(params: {
   let lastSavedNoteId: number | null = null;
   let touchedNotes = false;
   let touchedReminders = false;
+  let touchedListName: string | null = null;
+  let hasStreamedText = false;
 
   for (let step = 0; step < MAX_TOOL_ITERATIONS; step += 1) {
     await telegram.sendChatAction(chatId, 'typing');
@@ -230,6 +246,7 @@ export async function runAgentTurn(params: {
     const response = llm.chatStream
       ? await llm.chatStream(conversation, tools, async (partial) => {
           if (partial.trim().length >= 8) {
+            hasStreamedText = true;
             await updatePlaceholder(`${partial} ...`);
           }
         })
@@ -258,14 +275,20 @@ export async function runAgentTurn(params: {
     });
 
     for (const tc of callsToRun) {
-      const statusLabel = TOOL_STATUS_LABELS[tc.name] ?? `Выполняю ${tc.name}...`;
-      await updatePlaceholder(statusLabel, true);
+      if (!SILENT_TOOLS.has(tc.name) && !hasStreamedText) {
+        const statusLabel =
+          TOOL_STATUS_LABELS[tc.name] ?? `Выполняю ${tc.name}...`;
+        await updatePlaceholder(statusLabel, true);
+      }
 
       const toolOutput = await executeTool(tc.name, tc.arguments, {
         db: env.DB,
         userId,
         chatId,
         timezone,
+        ai: env.AI,
+        vectorize: env.VECTORIZE,
+        embeddingModel: env.WORKERS_AI_EMBEDDING_MODEL,
       });
 
       if (tc.name === 'save_note' || tc.name === 'update_note') {
@@ -286,6 +309,15 @@ export async function runAgentTurn(params: {
         tc.name === 'complete_reminder'
       ) {
         touchedReminders = true;
+      } else if (
+        tc.name === 'add_to_list' ||
+        tc.name === 'get_list' ||
+        tc.name === 'toggle_list_item'
+      ) {
+        touchedListName =
+          typeof tc.arguments.list_name === 'string' && tc.arguments.list_name.trim()
+            ? tc.arguments.list_name.trim().toLowerCase()
+            : '';
       }
 
       const toolMsg: ChatMessage = {
@@ -338,6 +370,12 @@ export async function runAgentTurn(params: {
     actionRow.push({
       text: 'Напоминания',
       callback_data: 'menu:rems:pending',
+    });
+  }
+  if (touchedListName !== null) {
+    actionRow.push({
+      text: touchedListName ? `Список: ${touchedListName}` : 'Списки',
+      callback_data: `menu:lists:${touchedListName}`,
     });
   }
 

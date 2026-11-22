@@ -26,6 +26,13 @@ export interface TelegramForwardOrigin {
   chat?: { title?: string; username?: string };
 }
 
+export interface TelegramPhotoSize {
+  file_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
+
 export interface TelegramMessage {
   message_id: number;
   from?: TelegramUser;
@@ -34,6 +41,7 @@ export interface TelegramMessage {
   text?: string;
   caption?: string;
   voice?: TelegramVoice;
+  photo?: TelegramPhotoSize[];
   forward_origin?: TelegramForwardOrigin;
 }
 

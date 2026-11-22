@@ -1,6 +1,7 @@
 import type {
   ChatSummaryRow,
   ConversationEpisodeRow,
+  ListItemRow,
   MemoryRow,
   MessageRow,
   NoteRow,
@@ -229,6 +230,33 @@ export async function listRecentNotes(
       'SELECT * FROM notes WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?',
     )
     .bind(userId, limit, offset)
+    .all<NoteRow>();
+  return results;
+}
+
+export async function listAllNotes(
+  db: D1Database,
+  userId: number,
+): Promise<NoteRow[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM notes WHERE user_id = ? ORDER BY updated_at DESC')
+    .bind(userId)
+    .all<NoteRow>();
+  return results;
+}
+
+export async function getNotesByIds(
+  db: D1Database,
+  userId: number,
+  ids: number[],
+): Promise<NoteRow[]> {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(', ');
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM notes WHERE user_id = ? AND id IN (${placeholders})`,
+    )
+    .bind(userId, ...ids)
     .all<NoteRow>();
   return results;
 }
@@ -499,8 +527,13 @@ export async function deleteMemoryById(
 export async function getUserStats(
   db: D1Database,
   userId: number,
-): Promise<{ notes: number; pendingReminders: number; memories: number }> {
-  const [notesRow, remRow, memRow] = await Promise.all([
+): Promise<{
+  notes: number;
+  pendingReminders: number;
+  memories: number;
+  openListItems: number;
+}> {
+  const [notesRow, remRow, memRow, listRow] = await Promise.all([
     db
       .prepare('SELECT COUNT(*) as cnt FROM notes WHERE user_id = ?')
       .bind(userId)
@@ -515,12 +548,19 @@ export async function getUserStats(
       .prepare('SELECT COUNT(*) as cnt FROM memories WHERE user_id = ?')
       .bind(userId)
       .first<{ cnt: number }>(),
+    db
+      .prepare(
+        'SELECT COUNT(*) as cnt FROM list_items WHERE user_id = ? AND done = 0',
+      )
+      .bind(userId)
+      .first<{ cnt: number }>(),
   ]);
 
   return {
     notes: notesRow?.cnt ?? 0,
     pendingReminders: remRow?.cnt ?? 0,
     memories: memRow?.cnt ?? 0,
+    openListItems: listRow?.cnt ?? 0,
   };
 }
 
@@ -681,4 +721,175 @@ export async function listRecentEpisodes(
     .bind(userId, limit)
     .all<ConversationEpisodeRow>();
   return results;
+}
+
+/* ---------------- Interactive Lists ---------------- */
+
+export async function addListItems(
+  db: D1Database,
+  userId: number,
+  listName: string,
+  items: string[],
+): Promise<ListItemRow[]> {
+  const cleanList = listName.trim().toLowerCase() || 'общий';
+  const now = Date.now();
+  const inserted: ListItemRow[] = [];
+
+  for (const raw of items) {
+    const text = raw.trim();
+    if (!text) continue;
+    const row = await db
+      .prepare(
+        'INSERT INTO list_items (user_id, list_name, text, done, created_at) VALUES (?, ?, ?, 0, ?) RETURNING *',
+      )
+      .bind(userId, cleanList, text, now)
+      .first<ListItemRow>();
+    if (row) inserted.push(row);
+  }
+  return inserted;
+}
+
+export async function getListNames(
+  db: D1Database,
+  userId: number,
+): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT DISTINCT list_name FROM list_items WHERE user_id = ? ORDER BY list_name ASC',
+    )
+    .bind(userId)
+    .all<{ list_name: string }>();
+  return results.map((r) => r.list_name);
+}
+
+export async function getListItems(
+  db: D1Database,
+  userId: number,
+  listName?: string,
+): Promise<ListItemRow[]> {
+  if (listName) {
+    const { results } = await db
+      .prepare(
+        'SELECT * FROM list_items WHERE user_id = ? AND list_name = ? ORDER BY done ASC, id DESC LIMIT 40',
+      )
+      .bind(userId, listName.trim().toLowerCase())
+      .all<ListItemRow>();
+    return results;
+  }
+
+  const { results } = await db
+    .prepare(
+      'SELECT * FROM list_items WHERE user_id = ? ORDER BY list_name ASC, done ASC, id DESC LIMIT 50',
+    )
+    .bind(userId)
+    .all<ListItemRow>();
+  return results;
+}
+
+export async function toggleListItem(
+  db: D1Database,
+  userId: number,
+  itemId: number,
+  explicitDone?: boolean,
+): Promise<ListItemRow | null> {
+  const existing = await db
+    .prepare('SELECT * FROM list_items WHERE id = ? AND user_id = ?')
+    .bind(itemId, userId)
+    .first<ListItemRow>();
+  if (!existing) return null;
+
+  const nextDone =
+    explicitDone !== undefined ? (explicitDone ? 1 : 0) : existing.done ? 0 : 1;
+
+  return db
+    .prepare(
+      'UPDATE list_items SET done = ? WHERE id = ? AND user_id = ? RETURNING *',
+    )
+    .bind(nextDone, itemId, userId)
+    .first<ListItemRow>();
+}
+
+export async function deleteListItem(
+  db: D1Database,
+  userId: number,
+  itemId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM list_items WHERE id = ? AND user_id = ?')
+    .bind(itemId, userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function clearDoneListItems(
+  db: D1Database,
+  userId: number,
+  listName: string,
+): Promise<number> {
+  const result = await db
+    .prepare(
+      'DELETE FROM list_items WHERE user_id = ? AND list_name = ? AND done = 1',
+    )
+    .bind(userId, listName.trim().toLowerCase())
+    .run();
+  return result.meta.changes ?? 0;
+}
+
+/* ---------------- Daily Briefing Settings ---------------- */
+
+export async function touchUserChatId(
+  db: D1Database,
+  userId: number,
+  chatId: number,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, chat_id, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET
+         chat_id = COALESCE(user_settings.chat_id, excluded.chat_id)`,
+    )
+    .bind(userId, chatId, Date.now())
+    .run();
+}
+
+export async function setUserBriefingHour(
+  db: D1Database,
+  userId: number,
+  chatId: number,
+  hour: number | null,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, chat_id, briefing_hour, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET
+         chat_id = excluded.chat_id,
+         briefing_hour = excluded.briefing_hour,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, chatId, hour, Date.now())
+    .run();
+}
+
+export async function getUsersForBriefing(
+  db: D1Database,
+): Promise<UserSettingsRow[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT * FROM user_settings WHERE briefing_hour IS NOT NULL AND chat_id IS NOT NULL',
+    )
+    .all<UserSettingsRow>();
+  return results;
+}
+
+export async function markBriefingSent(
+  db: D1Database,
+  userId: number,
+  dateStr: string,
+): Promise<void> {
+  await db
+    .prepare('UPDATE user_settings SET last_briefing_date = ? WHERE user_id = ?')
+    .bind(dateStr, userId)
+    .run();
 }

@@ -2,8 +2,11 @@ import { Hono } from 'hono';
 import { runAgentTurn } from './agent/runner';
 import type { AppEnv } from './config/env';
 import { processDueReminders } from './cron/reminders';
-import { tryMarkUpdateProcessed } from './db/queries';
-import { transcribeAudioWithWorkersAI } from './llm/workers-ai';
+import { touchUserChatId, tryMarkUpdateProcessed } from './db/queries';
+import {
+  describeImageWithWorkersAI,
+  transcribeAudioWithWorkersAI,
+} from './llm/workers-ai';
 import { isUserAllowed, verifySecretToken } from './telegram/auth';
 import { handleCallbackQuery } from './telegram/callbacks';
 import { TelegramClient } from './telegram/client';
@@ -95,7 +98,35 @@ async function handleUpdate(
   const chatId = msg.chat.id;
 
   try {
+    await touchUserChatId(env.DB, userId, chatId);
     let userText = (msg.text ?? msg.caption ?? '').trim();
+
+    if (msg.photo && msg.photo.length > 0) {
+      await telegram.sendChatAction(chatId, 'typing');
+      const bestPhoto = msg.photo[msg.photo.length - 1];
+      const imageBuffer = await telegram.getFileBytes(bestPhoto.file_id);
+      const visionModel =
+        env.WORKERS_AI_VISION_MODEL ||
+        '@cf/meta/llama-4-scout-17b-16e-instruct';
+      const visionDescription = await describeImageWithWorkersAI(
+        env.AI,
+        visionModel,
+        imageBuffer,
+        userText || undefined,
+      );
+
+      if (!visionDescription) {
+        await telegram.sendMessage(
+          chatId,
+          'Не удалось распознать содержимое изображения.',
+        );
+        return;
+      }
+
+      userText = userText
+        ? `${userText}\n\n[Содержимое приложенного изображения]:\n${visionDescription}`
+        : `[Пользователь прислал изображение. Распознанное содержимое]:\n${visionDescription}`;
+    }
 
     if (!userText && msg.voice) {
       await telegram.sendChatAction(chatId, 'typing');

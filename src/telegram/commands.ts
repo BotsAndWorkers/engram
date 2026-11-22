@@ -1,5 +1,6 @@
 import type { AppEnv } from '../config/env';
 import {
+  listAllNotes,
   searchNotes,
   setUserModel,
   setUserTimezone,
@@ -9,11 +10,41 @@ import {
   buildClearConfirmScreen,
   buildHelpScreen,
   buildHomeScreen,
+  buildListsScreen,
   buildMemoryScreen,
   buildNotesScreen,
   buildRemindersScreen,
   buildSettingsScreen,
 } from './ui';
+
+export async function exportNotesAsMarkdown(
+  env: AppEnv,
+  telegram: TelegramClient,
+  userId: number,
+  chatId: number,
+): Promise<boolean> {
+  const notes = await listAllNotes(env.DB, userId);
+  if (notes.length === 0) {
+    await telegram.sendMessage(chatId, 'Заметок для экспорта пока нет.');
+    return false;
+  }
+
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const sections = notes.map((n) => {
+    const tags = n.tags ? `\nТеги: ${n.tags}` : '';
+    const updated = new Date(n.updated_at).toISOString();
+    return `# ${n.title} (#${n.id})\nОбновлено: ${updated}${tags}\n\n${n.content}\n`;
+  });
+
+  const markdown = `---\nexported_at: ${new Date().toISOString()}\ncount: ${notes.length}\n---\n\n${sections.join('\n---\n\n')}`;
+  await telegram.sendDocument(
+    chatId,
+    `engram-notes-${dateStr}.md`,
+    markdown,
+    `Экспорт заметок: ${notes.length} шт.`,
+  );
+  return true;
+}
 
 export interface CommandContext {
   env: AppEnv;
@@ -112,6 +143,19 @@ export async function handleSlashCommand(ctx: CommandContext): Promise<boolean> 
       await ctx.telegram.sendMessage(ctx.chatId, screen.text, {
         replyMarkup: screen.replyMarkup,
       });
+      return true;
+    }
+
+    case '/lists': {
+      const screen = await buildListsScreen(ctx.env, ctx.userId, arg || undefined);
+      await ctx.telegram.sendMessage(ctx.chatId, screen.text, {
+        replyMarkup: screen.replyMarkup,
+      });
+      return true;
+    }
+
+    case '/export': {
+      await exportNotesAsMarkdown(ctx.env, ctx.telegram, ctx.userId, ctx.chatId);
       return true;
     }
 

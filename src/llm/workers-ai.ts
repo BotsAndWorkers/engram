@@ -348,3 +348,60 @@ export async function transcribeAudioWithWorkersAI(
 
   return (result.text ?? '').trim();
 }
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+export async function describeImageWithWorkersAI(
+  ai: Ai,
+  visionModel: string,
+  imageBuffer: ArrayBuffer,
+  caption?: string,
+): Promise<string> {
+  const base64 = arrayBufferToBase64(imageBuffer);
+  const prompt = caption
+    ? `Пользователь прислал изображение с подписью: "${caption}". Подробно опиши содержимое изображения, извлеки весь важный текст (если есть) и помоги ответить на запрос пользователя.`
+    : 'Подробно опиши содержимое этого изображения на русском языке и точно извлеки весь видимый текст, цифры, даты или контакты, если они есть.';
+
+  const result = (await ai.run(visionModel as keyof AiModels, {
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          {
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${base64}` },
+          },
+        ],
+      },
+    ],
+    max_tokens: 900,
+  })) as WorkersAIRawResponse;
+
+  return normalizeWorkersAIResponse(result).content;
+}
+
+export async function generateEmbeddingWithWorkersAI(
+  ai: Ai,
+  embeddingModel: string,
+  text: string,
+): Promise<number[] | null> {
+  const trimmed = text.trim().slice(0, 4000);
+  if (!trimmed) return null;
+
+  const result = (await ai.run(embeddingModel as keyof AiModels, {
+    text: [trimmed],
+  })) as { data?: number[][] };
+
+  const vector = result.data?.[0];
+  return Array.isArray(vector) && vector.length > 0 ? vector : null;
+}
