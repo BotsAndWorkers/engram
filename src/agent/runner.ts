@@ -15,6 +15,23 @@ import { executeTool, getToolDefinitions } from '../tools/registry';
 
 const MAX_TOOL_ITERATIONS = 5;
 const HISTORY_WINDOW = 14;
+const STREAM_EDIT_INTERVAL_MS = 1100;
+
+const TOOL_STATUS_LABELS: Record<string, string> = {
+  save_note: 'Сохраняю заметку...',
+  search_notes: 'Ищу в заметках...',
+  get_note: 'Читаю заметку...',
+  update_note: 'Обновляю заметку...',
+  delete_note: 'Удаляю заметку...',
+  list_recent_notes: 'Просматриваю заметки...',
+  create_reminder: 'Создаю напоминание...',
+  list_reminders: 'Проверяю напоминания...',
+  complete_reminder: 'Отмечаю напоминание выполненным...',
+  delete_reminder: 'Удаляю напоминание...',
+  remember_fact: 'Запоминаю...',
+  forget_fact: 'Обновляю память...',
+  fetch_url: 'Читаю страницу по ссылке...',
+};
 
 function formatCurrentDateTimeWithOffset(timezone: string): string {
   const now = new Date();
@@ -125,6 +142,29 @@ export async function runAgentTurn(params: {
     { role: 'user', content: userText },
   ];
 
+  const statusMessageId = await telegram
+    .sendMessage(chatId, 'Думаю...')
+    .catch(() => 0);
+
+  let lastEditAt = 0;
+  let lastEditedText = 'Думаю...';
+
+  const updatePlaceholder = async (text: string, force = false) => {
+    if (!statusMessageId) return;
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === lastEditedText) return;
+    const now = Date.now();
+    if (!force && now - lastEditAt < STREAM_EDIT_INTERVAL_MS) return;
+
+    lastEditAt = now;
+    lastEditedText = trimmed;
+    const preview =
+      trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}...` : trimmed;
+    await telegram
+      .editMessageText(chatId, statusMessageId, preview)
+      .catch(() => undefined);
+  };
+
   let finalText = '';
   let lastSavedNoteId: number | null = null;
   let touchedNotes = false;
@@ -133,7 +173,13 @@ export async function runAgentTurn(params: {
   for (let step = 0; step < MAX_TOOL_ITERATIONS; step += 1) {
     await telegram.sendChatAction(chatId, 'typing');
 
-    const response = await llm.chat(conversation, tools);
+    const response = llm.chatStream
+      ? await llm.chatStream(conversation, tools, async (partial) => {
+          if (partial.trim().length >= 8) {
+            await updatePlaceholder(`${partial} ...`);
+          }
+        })
+      : await llm.chat(conversation, tools);
 
     if (response.toolCalls.length === 0) {
       finalText = response.content;
@@ -155,6 +201,9 @@ export async function runAgentTurn(params: {
     });
 
     for (const tc of response.toolCalls) {
+      const statusLabel = TOOL_STATUS_LABELS[tc.name] ?? `Выполняю ${tc.name}...`;
+      await updatePlaceholder(statusLabel, true);
+
       const toolOutput = await executeTool(tc.name, tc.arguments, {
         db: env.DB,
         userId,
@@ -201,7 +250,13 @@ export async function runAgentTurn(params: {
 
   if (!finalText) {
     // Force one final summary response without tools if loop hit iteration cap
-    const fallback = await llm.chat(conversation, []);
+    const fallback = llm.chatStream
+      ? await llm.chatStream(conversation, [], async (partial) => {
+          if (partial.trim().length >= 8) {
+            await updatePlaceholder(`${partial} ...`);
+          }
+        })
+      : await llm.chat(conversation, []);
     finalText =
       fallback.content ||
       'Действия выполнены, но модель не сформировала текстовый ответ.';
@@ -231,11 +286,19 @@ export async function runAgentTurn(params: {
     });
   }
 
-  await telegram.sendMessage(
-    chatId,
-    finalText,
+  const replyOptions =
     actionRow.length > 0
       ? { replyMarkup: { inline_keyboard: [actionRow] } }
-      : undefined,
-  );
+      : undefined;
+
+  if (statusMessageId) {
+    await telegram.editMessageText(
+      chatId,
+      statusMessageId,
+      finalText,
+      replyOptions,
+    );
+  } else {
+    await telegram.sendMessage(chatId, finalText, replyOptions);
+  }
 }

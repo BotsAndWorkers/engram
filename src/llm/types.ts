@@ -42,4 +42,9 @@ export interface LLMProvider {
   readonly name: string;
   readonly model: string;
   chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<LLMResponse>;
+  chatStream?(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onDelta: (partialText: string) => Promise<void> | void,
+  ): Promise<LLMResponse>;
 }

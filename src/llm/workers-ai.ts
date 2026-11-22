@@ -39,6 +39,47 @@ export class WorkersAIProvider implements LLMProvider {
     messages: ChatMessage[],
     tools: ToolDefinition[],
   ): Promise<LLMResponse> {
+    const payload = this.buildPayload(messages, tools, false);
+    const raw = (await this.ai.run(
+      this.model as keyof AiModels,
+      payload,
+    )) as WorkersAIRawResponse;
+
+    return normalizeWorkersAIResponse(raw);
+  }
+
+  async chatStream(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    onDelta: (partialText: string) => Promise<void> | void,
+  ): Promise<LLMResponse> {
+    const payload = this.buildPayload(messages, tools, true);
+    const raw = await this.ai.run(this.model as keyof AiModels, payload);
+
+    if (
+      raw &&
+      typeof raw === 'object' &&
+      'getReader' in raw &&
+      typeof (raw as ReadableStream).getReader === 'function'
+    ) {
+      return readWorkersAISseStream(
+        raw as ReadableStream<Uint8Array>,
+        onDelta,
+      );
+    }
+
+    const normalized = normalizeWorkersAIResponse(raw as WorkersAIRawResponse);
+    if (normalized.content) {
+      await onDelta(normalized.content);
+    }
+    return normalized;
+  }
+
+  private buildPayload(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    stream: boolean,
+  ): Record<string, unknown> {
     const formattedMessages = messages.map((msg) => {
       if (msg.role === 'assistant' && msg.tool_calls?.length) {
         return {
@@ -82,19 +123,130 @@ export class WorkersAIProvider implements LLMProvider {
     const payload: Record<string, unknown> = {
       messages: formattedMessages,
       max_tokens: 1500,
+      ...(stream ? { stream: true } : {}),
     };
 
     if (formattedTools.length > 0) {
       payload.tools = formattedTools;
     }
 
-    const raw = (await this.ai.run(
-      this.model as keyof AiModels,
-      payload,
-    )) as WorkersAIRawResponse;
-
-    return normalizeWorkersAIResponse(raw);
+    return payload;
   }
+}
+
+interface WorkersAISseChunk {
+  response?: string | null;
+  tool_calls?: WorkersAIRawToolCall[];
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        function?: {
+          name?: string;
+          arguments?: string;
+        };
+      }>;
+    };
+    message?: {
+      content?: string | null;
+      tool_calls?: WorkersAIRawToolCall[];
+    };
+  }>;
+}
+
+async function readWorkersAISseStream(
+  stream: ReadableStream<Uint8Array>,
+  onDelta: (partialText: string) => Promise<void> | void,
+): Promise<LLMResponse> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  const directToolCalls: WorkersAIRawToolCall[] = [];
+  const indexedCalls = new Map<
+    number,
+    { id?: string; name: string; argsRaw: string }
+  >();
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line.startsWith('data:')) continue;
+
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+
+        let chunk: WorkersAISseChunk;
+        try {
+          chunk = JSON.parse(payload) as WorkersAISseChunk;
+        } catch {
+          continue;
+        }
+
+        const deltaText =
+          chunk.choices?.[0]?.delta?.content ??
+          chunk.choices?.[0]?.message?.content ??
+          chunk.response ??
+          '';
+
+        if (deltaText) {
+          fullText += deltaText;
+          await onDelta(fullText);
+        }
+
+        if (chunk.tool_calls?.length) {
+          directToolCalls.push(...chunk.tool_calls);
+        }
+        if (chunk.choices?.[0]?.message?.tool_calls?.length) {
+          directToolCalls.push(...chunk.choices[0].message.tool_calls);
+        }
+
+        const deltaCalls = chunk.choices?.[0]?.delta?.tool_calls;
+        if (deltaCalls?.length) {
+          for (const dc of deltaCalls) {
+            const idx = dc.index ?? 0;
+            const prev = indexedCalls.get(idx) ?? {
+              id: dc.id,
+              name: '',
+              argsRaw: '',
+            };
+            if (dc.id) prev.id = dc.id;
+            if (dc.function?.name) prev.name += dc.function.name;
+            if (dc.function?.arguments) prev.argsRaw += dc.function.arguments;
+            indexedCalls.set(idx, prev);
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const combinedRawCalls: WorkersAIRawToolCall[] = [...directToolCalls];
+  for (const [, entry] of indexedCalls) {
+    if (entry.name) {
+      combinedRawCalls.push({
+        id: entry.id,
+        name: entry.name,
+        arguments: entry.argsRaw,
+      });
+    }
+  }
+
+  return normalizeWorkersAIResponse({
+    response: fullText,
+    tool_calls: combinedRawCalls,
+  });
 }
 
 export function normalizeWorkersAIResponse(
