@@ -4,6 +4,12 @@ import { buildSafeFtsQuery } from '../src/db/queries';
 import { normalizeWorkersAIResponse } from '../src/llm/workers-ai';
 import { verifySecretToken } from '../src/telegram/auth';
 import { splitTelegramMessage } from '../src/telegram/client';
+import {
+  buildClearConfirmScreen,
+  buildHelpScreen,
+  MODEL_PRESETS,
+  TIMEZONE_PRESETS,
+} from '../src/telegram/ui';
 import { isPublicHttpUrl } from '../src/tools/web';
 
 describe('buildSafeFtsQuery', () => {
@@ -106,5 +112,16 @@ describe('auth helpers', () => {
     expect(ids.has(12345)).toBe(true);
     expect(ids.has(67890)).toBe(true);
     expect(ids.size).toBe(2);
+  });
+});
+
+describe('telegram UI screens', () => {
+  it('builds help and clear confirmation screens with valid callback_data lengths', () => {
+    const help = buildHelpScreen();
+    const clear = buildClearConfirmScreen();
+    expect(help.replyMarkup.inline_keyboard[0][0].callback_data).toBe('menu:home');
+    expect(clear.replyMarkup.inline_keyboard[0][0].callback_data).toBe('menu:clear_ok');
+    expect(MODEL_PRESETS.length).toBeGreaterThanOrEqual(4);
+    expect(TIMEZONE_PRESETS.length).toBeGreaterThanOrEqual(4);
   });
 });

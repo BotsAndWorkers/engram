@@ -186,12 +186,13 @@ export async function listRecentNotes(
   db: D1Database,
   userId: number,
   limit = 10,
+  offset = 0,
 ): Promise<NoteRow[]> {
   const { results } = await db
     .prepare(
-      'SELECT * FROM notes WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?',
+      'SELECT * FROM notes WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?',
     )
-    .bind(userId, limit)
+    .bind(userId, limit, offset)
     .all<NoteRow>();
   return results;
 }
@@ -445,6 +446,46 @@ export async function deleteMemory(
     .bind(userId, key.trim().toLowerCase())
     .run();
   return (result.meta.changes ?? 0) > 0;
+}
+
+export async function deleteMemoryById(
+  db: D1Database,
+  userId: number,
+  memoryId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM memories WHERE id = ? AND user_id = ?')
+    .bind(memoryId, userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function getUserStats(
+  db: D1Database,
+  userId: number,
+): Promise<{ notes: number; pendingReminders: number; memories: number }> {
+  const [notesRow, remRow, memRow] = await Promise.all([
+    db
+      .prepare('SELECT COUNT(*) as cnt FROM notes WHERE user_id = ?')
+      .bind(userId)
+      .first<{ cnt: number }>(),
+    db
+      .prepare(
+        "SELECT COUNT(*) as cnt FROM reminders WHERE user_id = ? AND status = 'pending'",
+      )
+      .bind(userId)
+      .first<{ cnt: number }>(),
+    db
+      .prepare('SELECT COUNT(*) as cnt FROM memories WHERE user_id = ?')
+      .bind(userId)
+      .first<{ cnt: number }>(),
+  ]);
+
+  return {
+    notes: notesRow?.cnt ?? 0,
+    pendingReminders: remRow?.cnt ?? 0,
+    memories: memRow?.cnt ?? 0,
+  };
 }
 
 export async function listMemories(

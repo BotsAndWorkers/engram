@@ -42,14 +42,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy
 
-      - name: Register Telegram webhook
+      - name: Register Telegram webhook and menu commands
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
         run: |
           node -e '
           (async () => {
-            const res = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/setWebhook`, {
+            const base = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+            const whRes = await fetch(`${base}/setWebhook`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -57,9 +58,29 @@ jobs:
                 secret_token: process.env.TELEGRAM_WEBHOOK_SECRET,
               }),
             });
-            const data = await res.json();
-            console.log("setWebhook:", data.ok, data.description);
-            if (!res.ok || !data.ok) process.exit(1);
+            const whData = await whRes.json();
+            console.log("setWebhook:", whData.ok, whData.description);
+            if (!whRes.ok || !whData.ok) process.exit(1);
+
+            const cmdRes = await fetch(`${base}/setMyCommands`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                commands: [
+                  { command: "menu", description: "Главное меню" },
+                  { command: "notes", description: "Заметки и поиск" },
+                  { command: "reminders", description: "Напоминания" },
+                  { command: "memory", description: "Долгосрочная память" },
+                  { command: "model", description: "Выбор модели AI" },
+                  { command: "tz", description: "Часовой пояс" },
+                  { command: "clear", description: "Очистить историю чата" },
+                  { command: "help", description: "Справка" }
+                ]
+              }),
+            });
+            const cmdData = await cmdRes.json();
+            console.log("setMyCommands:", cmdData.ok, cmdData.description);
+            if (!cmdRes.ok || !cmdData.ok) process.exit(1);
           })();
           '
 
