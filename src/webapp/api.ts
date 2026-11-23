@@ -409,13 +409,41 @@ async function probeOpenAIProvider(params: {
 
     if (!res.ok) {
       const errText = await res.text();
+      let extraModels = '';
+      if (res.status === 402 && params.id === 'io-net') {
+        try {
+          const modelsRes = await fetch(
+            `${params.baseUrl.replace(/\/$/, '')}/models`,
+            {
+              headers: {
+                Authorization: `Bearer ${params.apiKey}`,
+                'User-Agent': 'engram-bot/1.0',
+              },
+            },
+          );
+          if (modelsRes.ok) {
+            const mJson = (await modelsRes.json()) as {
+              data?: Array<{ id?: string }>;
+            };
+            const ids = (mJson.data || [])
+              .map((m) => m.id)
+              .filter(Boolean)
+              .slice(0, 5);
+            if (ids.length > 0) {
+              extraModels = ` | Доступны: ${ids.join(', ')}`;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
       return {
         id: params.id,
         name: params.name,
         configured: true,
         ok: false,
         latencyMs,
-        details: `HTTP ${res.status}: ${errText.slice(0, 140)}`,
+        details: `HTTP ${res.status}: ${errText.slice(0, 110)}${extraModels}`,
       };
     }
 
