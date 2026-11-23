@@ -12,6 +12,7 @@ interface OpenAICompatibleResponse {
       content?: string | null;
       tool_calls?: Array<{
         id?: string;
+        extra_content?: Record<string, unknown>;
         function?: {
           name?: string;
           arguments?: string;
@@ -28,6 +29,7 @@ interface OpenAISseChunk {
       tool_calls?: Array<{
         index?: number;
         id?: string;
+        extra_content?: Record<string, unknown>;
         function?: {
           name?: string;
           arguments?: string;
@@ -93,6 +95,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         id: call.id || `call_${i}_${Date.now()}`,
         name: fnName,
         arguments: args,
+        ...(call.extra_content ? { extra_content: call.extra_content } : {}),
       });
     }
 
@@ -148,6 +151,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
               name: tc.name,
               arguments: JSON.stringify(tc.arguments),
             },
+            ...(tc.extra_content ? { extra_content: tc.extra_content } : {}),
           })),
         };
       }
@@ -195,7 +199,12 @@ async function readOpenAISseStream(
   let fullText = '';
   const indexedCalls = new Map<
     number,
-    { id?: string; name: string; argsRaw: string }
+    {
+      id?: string;
+      name: string;
+      argsRaw: string;
+      extraContent?: Record<string, unknown>;
+    }
   >();
 
   try {
@@ -237,6 +246,7 @@ async function readOpenAISseStream(
               argsRaw: '',
             };
             if (tc.id) prev.id = tc.id;
+            if (tc.extra_content) prev.extraContent = tc.extra_content;
             if (tc.function?.name) prev.name += tc.function.name;
             if (tc.function?.arguments) prev.argsRaw += tc.function.arguments;
             indexedCalls.set(idx, prev);
@@ -263,6 +273,7 @@ async function readOpenAISseStream(
       id: entry.id || `call_${idx}_${Date.now()}`,
       name: entry.name,
       arguments: args,
+      ...(entry.extraContent ? { extra_content: entry.extraContent } : {}),
     });
   }
 

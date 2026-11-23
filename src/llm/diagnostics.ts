@@ -149,7 +149,7 @@ export async function probeAllProviders(
       name: 'Groq',
       baseUrl: 'https://api.groq.com/openai/v1',
       apiKey: env.GROQ_API_KEY,
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-8b-instant',
     }),
     probeOpenAIProvider({
       id: 'io-net',

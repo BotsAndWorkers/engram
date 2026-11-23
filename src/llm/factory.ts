@@ -94,7 +94,7 @@ export function createLLMProvider(
         'groq',
         'https://api.groq.com/openai/v1',
         env.GROQ_API_KEY,
-        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant',
       ),
     );
   }

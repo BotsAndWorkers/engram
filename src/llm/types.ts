@@ -4,6 +4,7 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  extra_content?: Record<string, unknown>;
 }
 
 export interface ChatMessage {
