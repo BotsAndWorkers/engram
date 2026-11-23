@@ -53,16 +53,24 @@ export class OpenAICompatibleProvider implements LLMProvider {
   ): Promise<LLMResponse> {
     const endpoint = `${this.baseUrl.replace(/\/$/, '')}/chat/completions`;
     const body = this.buildRequestBody(messages, tools, false);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 18_000);
 
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-        'User-Agent': 'engram-bot/1.0',
-      },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+          'User-Agent': 'engram-bot/1.0',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       const errText = await res.text();
@@ -109,16 +117,24 @@ export class OpenAICompatibleProvider implements LLMProvider {
   ): Promise<LLMResponse> {
     const endpoint = `${this.baseUrl.replace(/\/$/, '')}/chat/completions`;
     const body = this.buildRequestBody(messages, tools, true);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
 
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-        'User-Agent': 'engram-bot/1.0',
-      },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+          'User-Agent': 'engram-bot/1.0',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       const errText = await res.text();

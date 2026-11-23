@@ -108,11 +108,12 @@ async function findWorkingModels(
   baseUrl: string,
   apiKey: string,
   candidateIds: string[],
+  maxChecks = 12,
 ): Promise<string[]> {
   const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-  const checks = candidateIds.slice(0, 45).map(async (modelId) => {
+  const checks = candidateIds.slice(0, maxChecks).map(async (modelId) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
+    const timer = setTimeout(() => controller.abort(), 4500);
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -211,10 +212,16 @@ export async function probeAllProviders(
       const candidates = (listJson.data || [])
         .map((m) => m.id)
         .filter((id): id is string => Boolean(id));
+      // Keep total subrequests well below Cloudflare Free Tier's 50-fetch limit
+      const prioritized = [
+        'nvidia/nemotron-3.5-super-vl',
+        ...candidates.filter((id) => id !== 'nvidia/nemotron-3.5-super-vl'),
+      ];
       const working = await findWorkingModels(
         'https://api.intelligence.io.solutions/api/v1',
         env.IO_API_KEY,
-        candidates,
+        prioritized,
+        10,
       );
       const latencyMs = Date.now() - start;
       if (working.length === 0) {
@@ -224,7 +231,7 @@ export async function probeAllProviders(
           configured: true,
           ok: false,
           latencyMs,
-          details: `Проверено ${Math.min(candidates.length, 45)} моделей — бесплатных на этом тире нет (402)`,
+          details: `Проверено ${Math.min(prioritized.length, 10)} моделей — бесплатных на этом тире нет (402)`,
         };
       }
       return {
@@ -313,7 +320,7 @@ async function fetchOpenAIModelList(params: {
       .filter((id) => Boolean(id) && (!params.filterFn || params.filterFn(id)));
 
     if (params.verifyAccess && rawIds.length > 0 && params.apiKey) {
-      rawIds = await findWorkingModels(params.baseUrl, params.apiKey, rawIds);
+      rawIds = await findWorkingModels(params.baseUrl, params.apiKey, rawIds, 10);
     }
 
     const models = rawIds.slice(0, 24).map((id) => ({
