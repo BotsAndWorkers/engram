@@ -1,5 +1,6 @@
 import { getUserSettings, setUserModel } from '../db/queries';
 import {
+  getProviderCatalogPage,
   getProvidersCatalog,
   probeAllProviders,
   probeOpenAIProvider,
@@ -36,7 +37,7 @@ export const infraTools: RegisteredTool[] = [
     definition: {
       name: 'list_available_models',
       description:
-        'Fetch the live catalog of available models from all configured providers or a specific provider (gemini, groq, io-net, workers-ai).',
+        'Fetch verified working models in batches of 10 from providers (gemini, groq, io-net, workers-ai). Pass provider and offset to paginate through large catalogs like io-net.',
       parameters: {
         type: 'object',
         properties: {
@@ -46,6 +47,10 @@ export const infraTools: RegisteredTool[] = [
               'Optional provider filter: gemini, groq, io-net, or workers-ai',
             enum: ['gemini', 'groq', 'io-net', 'workers-ai'],
           },
+          offset: {
+            type: 'number',
+            description: 'Optional pagination offset (0, 10, 20...) when querying a single provider',
+          },
         },
       },
     },
@@ -53,18 +58,38 @@ export const infraTools: RegisteredTool[] = [
       if (!ctx.env) {
         return { error: 'Environment bindings unavailable.' };
       }
-      const catalog = await getProvidersCatalog(ctx.env);
       const filter = args.provider ? String(args.provider) : '';
-      const filtered = filter
-        ? catalog.filter((p) => p.id === filter)
-        : catalog;
+      const offset = Number(args.offset ?? 0) || 0;
 
+      if (filter) {
+        const page = await getProviderCatalogPage(ctx.env, filter, offset, 10);
+        if (!page) {
+          return { error: `Unknown provider: ${filter}` };
+        }
+        return {
+          providers: [
+            {
+              id: page.id,
+              name: page.name,
+              configured: page.configured,
+              error: page.error,
+              total_in_catalog: page.totalInCatalog,
+              next_offset: page.nextOffset,
+              models: page.models.map((m) => m.id),
+            },
+          ],
+        };
+      }
+
+      const catalog = await getProvidersCatalog(ctx.env);
       return {
-        providers: filtered.map((p) => ({
+        providers: catalog.map((p) => ({
           id: p.id,
           name: p.name,
           configured: p.configured,
           error: p.error,
+          total_in_catalog: p.totalInCatalog,
+          next_offset: p.nextOffset,
           models: p.models.map((m) => m.id),
         })),
       };

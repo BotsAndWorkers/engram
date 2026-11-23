@@ -18,7 +18,11 @@ import {
   setUserModel,
   toggleListItem,
 } from '../db/queries';
-import { getProvidersCatalog, probeAllProviders } from '../llm/diagnostics';
+import {
+  getProviderCatalogPage,
+  getProvidersCatalog,
+  probeAllProviders,
+} from '../llm/diagnostics';
 import { isUserAllowed } from '../telegram/auth';
 import { MODEL_PRESETS } from '../telegram/ui';
 import { renderMiniAppHtml } from './app';
@@ -354,6 +358,12 @@ webAppRoutes.post('/api/models/check', async (c) => {
 });
 
 webAppRoutes.get('/api/models/catalog', async (c) => {
+  const provider = c.req.query('provider');
+  const offset = Number.parseInt(c.req.query('offset') ?? '0', 10) || 0;
+  if (provider) {
+    const page = await getProviderCatalogPage(c.env, provider, offset, 10);
+    return c.json({ provider: page });
+  }
   const providers = await getProvidersCatalog(c.env);
   return c.json({ providers });
 });

@@ -821,13 +821,16 @@ export function renderMiniAppHtml(): string {
           if (isOpen) {
             if (!prov.configured) {
               modelsHtml = '<div class="card-meta" style="margin-top:8px">Добавь API-ключ в GitHub Secrets.</div>';
-            } else if (!modelsCount) {
-              modelsHtml = '<div class="card-meta" style="margin-top:8px">' + (loadingCatalog ? 'Загрузка списка моделей...' : 'Список моделей недоступен' + (prov.error ? ' (' + esc(prov.error) + ')' : '')) + '</div>';
+            } else if (!modelsCount && prov.nextOffset === null) {
+              modelsHtml = '<div class="card-meta" style="margin-top:8px">' + (loadingCatalog ? 'Загрузка списка моделей...' : 'Рабочих моделей не найдено' + (prov.error ? ' (' + esc(prov.error) + ')' : '')) + '</div>';
             } else {
               modelsHtml = '<div class="chip-row" style="margin-top:10px">' +
                 prov.models.map((m) =>
                   '<button class="btn-mini ' + (current === m.id ? 'accent' : '') + '" data-select-model="' + esc(m.id) + '">' + esc(m.label) + '</button>'
                 ).join('') +
+                (prov.nextOffset !== null && prov.nextOffset !== undefined
+                  ? '<button class="btn-mini accent" data-load-more-provider="' + esc(prov.id) + '" data-offset="' + prov.nextOffset + '">Проверить ещё (+10)</button>'
+                  : '') +
               '</div>';
             }
           }
@@ -1118,6 +1121,32 @@ export function renderMiniAppHtml(): string {
             haptic('medium');
             render();
           } catch (err) { showError(err.message); }
+          return;
+        }
+
+        const moreBtn = e.target.closest('[data-load-more-provider]');
+        if (moreBtn) {
+          const provId = moreBtn.getAttribute('data-load-more-provider');
+          const offset = Number(moreBtn.getAttribute('data-offset') || '0');
+          moreBtn.disabled = true;
+          moreBtn.textContent = 'Проверка...';
+          try {
+            const res = await api('/api/models/catalog?provider=' + encodeURIComponent(provId) + '&offset=' + offset);
+            if (res.provider && modelCatalog) {
+              const target = modelCatalog.find((p) => p.id === provId);
+              if (target) {
+                const seen = new Set(target.models.map((m) => m.id));
+                for (const m of res.provider.models || []) {
+                  if (!seen.has(m.id)) target.models.push(m);
+                }
+                target.nextOffset = res.provider.nextOffset;
+              }
+            }
+          } catch (err) {
+            showError(err.message);
+          } finally {
+            render();
+          }
           return;
         }
 

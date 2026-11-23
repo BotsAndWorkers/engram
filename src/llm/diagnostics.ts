@@ -16,6 +16,8 @@ export interface CatalogProvider {
   configured: boolean;
   prefix: string;
   models: Array<{ id: string; label: string }>;
+  totalInCatalog?: number;
+  nextOffset?: number | null;
   error?: string;
 }
 
@@ -186,6 +188,8 @@ export async function probeAllProviders(
     }
 
     const start = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
     try {
       const listRes = await fetch(
         'https://api.intelligence.io.solutions/api/v1/models',
@@ -194,53 +198,31 @@ export async function probeAllProviders(
             Authorization: `Bearer ${env.IO_API_KEY}`,
             'User-Agent': 'engram-bot/1.0',
           },
+          signal: controller.signal,
         },
       );
+      const latencyMs = Date.now() - start;
       if (!listRes.ok) {
         return {
           id: 'io-net',
           name: 'io.net',
           configured: true,
           ok: false,
-          latencyMs: Date.now() - start,
+          latencyMs,
           details: `HTTP ${listRes.status}`,
         };
       }
       const listJson = (await listRes.json()) as {
         data?: Array<{ id?: string }>;
       };
-      const candidates = (listJson.data || [])
-        .map((m) => m.id)
-        .filter((id): id is string => Boolean(id));
-      // Keep total subrequests well below Cloudflare Free Tier's 50-fetch limit
-      const prioritized = [
-        'nvidia/nemotron-3.5-super-vl',
-        ...candidates.filter((id) => id !== 'nvidia/nemotron-3.5-super-vl'),
-      ];
-      const working = await findWorkingModels(
-        'https://api.intelligence.io.solutions/api/v1',
-        env.IO_API_KEY,
-        prioritized,
-        10,
-      );
-      const latencyMs = Date.now() - start;
-      if (working.length === 0) {
-        return {
-          id: 'io-net',
-          name: 'io.net',
-          configured: true,
-          ok: false,
-          latencyMs,
-          details: `Проверено ${Math.min(prioritized.length, 10)} моделей — бесплатных на этом тире нет (402)`,
-        };
-      }
+      const total = (listJson.data || []).length;
       return {
         id: 'io-net',
         name: 'io.net',
         configured: true,
         ok: true,
         latencyMs,
-        details: `Доступно моделей: ${working.length} (${working.slice(0, 2).join(', ')})`,
+        details: `Ключ активен (моделей в каталоге: ${total})`,
       };
     } catch (err) {
       return {
@@ -251,6 +233,8 @@ export async function probeAllProviders(
         latencyMs: Date.now() - start,
         details: err instanceof Error ? err.message : 'Network error',
       };
+    } finally {
+      clearTimeout(timer);
     }
   };
 
@@ -282,6 +266,8 @@ async function fetchOpenAIModelList(params: {
   prefix: string;
   filterFn?: (id: string) => boolean;
   verifyAccess?: boolean;
+  offset?: number;
+  batchSize?: number;
 }): Promise<CatalogProvider> {
   if (!params.apiKey) {
     return {
@@ -315,15 +301,27 @@ async function fetchOpenAIModelList(params: {
     }
 
     const json = (await res.json()) as { data?: Array<{ id?: string }> };
-    let rawIds = (json.data || [])
+    const allIds = (json.data || [])
       .map((m) => (m.id ?? '').replace(/^models\//, ''))
       .filter((id) => Boolean(id) && (!params.filterFn || params.filterFn(id)));
 
-    if (params.verifyAccess && rawIds.length > 0 && params.apiKey) {
-      rawIds = await findWorkingModels(params.baseUrl, params.apiKey, rawIds, 10);
+    const offset = Math.max(0, params.offset ?? 0);
+    const batchSize = Math.max(1, Math.min(params.batchSize ?? 10, 15));
+    const slice = allIds.slice(offset, offset + batchSize);
+    const nextOffset =
+      offset + batchSize < allIds.length ? offset + batchSize : null;
+
+    let verifiedIds = slice;
+    if (params.verifyAccess && slice.length > 0 && params.apiKey) {
+      verifiedIds = await findWorkingModels(
+        params.baseUrl,
+        params.apiKey,
+        slice,
+        batchSize,
+      );
     }
 
-    const models = rawIds.slice(0, 24).map((id) => ({
+    const models = verifiedIds.map((id) => ({
       id: `${params.prefix}${id}`,
       label: id,
     }));
@@ -334,9 +332,8 @@ async function fetchOpenAIModelList(params: {
       configured: true,
       prefix: params.prefix,
       models,
-      ...(params.verifyAccess && models.length === 0
-        ? { error: 'Нет доступных бесплатных моделей на этом тарифе' }
-        : {}),
+      totalInCatalog: allIds.length,
+      nextOffset,
     };
   } catch (err) {
     return {
@@ -352,54 +349,80 @@ async function fetchOpenAIModelList(params: {
   }
 }
 
-export async function getProvidersCatalog(
+export async function getProviderCatalogPage(
   env: AppEnv,
-): Promise<CatalogProvider[]> {
-  const workersModels = MODEL_PRESETS.filter((m) =>
-    m.id.startsWith('@cf/'),
-  ).map((m) => ({ id: m.id, label: m.label }));
-
-  const [gemini, groq, ioNet] = await Promise.all([
-    fetchOpenAIModelList({
+  providerId: string,
+  offset = 0,
+  batchSize = 10,
+): Promise<CatalogProvider | null> {
+  if (providerId === 'gemini') {
+    return fetchOpenAIModelList({
       id: 'gemini',
       name: 'Google Gemini',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       apiKey: env.GEMINI_API_KEY,
       prefix: 'gemini:',
       verifyAccess: true,
+      offset,
+      batchSize,
       filterFn: (id) =>
         id.startsWith('gemini-') &&
         !id.includes('embedding') &&
         !id.includes('imagen') &&
         !id.includes('veo') &&
         !id.includes('tts'),
-    }),
-    fetchOpenAIModelList({
+    });
+  }
+  if (providerId === 'groq') {
+    return fetchOpenAIModelList({
       id: 'groq',
       name: 'Groq',
       baseUrl: 'https://api.groq.com/openai/v1',
       apiKey: env.GROQ_API_KEY,
       prefix: 'groq:',
       verifyAccess: true,
+      offset,
+      batchSize,
       filterFn: (id) => !id.includes('whisper') && !id.includes('guard'),
-    }),
-    fetchOpenAIModelList({
+    });
+  }
+  if (providerId === 'io-net') {
+    return fetchOpenAIModelList({
       id: 'io-net',
       name: 'io.net',
       baseUrl: 'https://api.intelligence.io.solutions/api/v1',
       apiKey: env.IO_API_KEY,
       prefix: 'io:',
       verifyAccess: true,
-    }),
+      offset,
+      batchSize,
+    });
+  }
+  if (providerId === 'workers-ai') {
+    const workersModels = MODEL_PRESETS.filter((m) =>
+      m.id.startsWith('@cf/'),
+    ).map((m) => ({ id: m.id, label: m.label }));
+    return {
+      id: 'workers-ai',
+      name: 'Cloudflare Workers AI',
+      configured: true,
+      prefix: '',
+      models: workersModels,
+      totalInCatalog: workersModels.length,
+      nextOffset: null,
+    };
+  }
+  return null;
+}
+
+export async function getProvidersCatalog(
+  env: AppEnv,
+): Promise<CatalogProvider[]> {
+  const results = await Promise.all([
+    getProviderCatalogPage(env, 'gemini', 0, 10),
+    getProviderCatalogPage(env, 'groq', 0, 10),
+    getProviderCatalogPage(env, 'io-net', 0, 10),
+    getProviderCatalogPage(env, 'workers-ai', 0, 10),
   ]);
-
-  const workersAi: CatalogProvider = {
-    id: 'workers-ai',
-    name: 'Cloudflare Workers AI',
-    configured: true,
-    prefix: '',
-    models: workersModels,
-  };
-
-  return [gemini, groq, ioNet, workersAi];
+  return results.filter((r): r is CatalogProvider => Boolean(r));
 }
