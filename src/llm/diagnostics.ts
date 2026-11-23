@@ -104,6 +104,42 @@ export async function probeOpenAIProvider(params: {
   }
 }
 
+async function findWorkingModels(
+  baseUrl: string,
+  apiKey: string,
+  candidateIds: string[],
+): Promise<string[]> {
+  const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const checks = candidateIds.slice(0, 12).map(async (modelId) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          'User-Agent': 'engram-bot/1.0',
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 1,
+        }),
+        signal: controller.signal,
+      });
+      return res.ok ? modelId : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  const results = await Promise.all(checks);
+  return results.filter((id): id is string => Boolean(id));
+}
+
 export async function probeAllProviders(
   env: AppEnv,
 ): Promise<ProviderProbeResult[]> {
@@ -136,6 +172,81 @@ export async function probeAllProviders(
     }
   };
 
+  const ioNetCheck = async (): Promise<ProviderProbeResult> => {
+    if (!env.IO_API_KEY) {
+      return {
+        id: 'io-net',
+        name: 'io.net',
+        configured: false,
+        ok: false,
+        latencyMs: null,
+        details: 'Ключ не добавлен в секреты',
+      };
+    }
+
+    const start = Date.now();
+    try {
+      const listRes = await fetch(
+        'https://api.intelligence.io.solutions/api/v1/models',
+        {
+          headers: {
+            Authorization: `Bearer ${env.IO_API_KEY}`,
+            'User-Agent': 'engram-bot/1.0',
+          },
+        },
+      );
+      if (!listRes.ok) {
+        return {
+          id: 'io-net',
+          name: 'io.net',
+          configured: true,
+          ok: false,
+          latencyMs: Date.now() - start,
+          details: `HTTP ${listRes.status}`,
+        };
+      }
+      const listJson = (await listRes.json()) as {
+        data?: Array<{ id?: string }>;
+      };
+      const candidates = (listJson.data || [])
+        .map((m) => m.id)
+        .filter((id): id is string => Boolean(id));
+      const working = await findWorkingModels(
+        'https://api.intelligence.io.solutions/api/v1',
+        env.IO_API_KEY,
+        candidates,
+      );
+      const latencyMs = Date.now() - start;
+      if (working.length === 0) {
+        return {
+          id: 'io-net',
+          name: 'io.net',
+          configured: true,
+          ok: false,
+          latencyMs,
+          details: `Проверено ${Math.min(candidates.length, 12)} моделей — бесплатных на этом тире нет (402)`,
+        };
+      }
+      return {
+        id: 'io-net',
+        name: 'io.net',
+        configured: true,
+        ok: true,
+        latencyMs,
+        details: `Доступно моделей: ${working.length} (${working.slice(0, 2).join(', ')})`,
+      };
+    } catch (err) {
+      return {
+        id: 'io-net',
+        name: 'io.net',
+        configured: true,
+        ok: false,
+        latencyMs: Date.now() - start,
+        details: err instanceof Error ? err.message : 'Network error',
+      };
+    }
+  };
+
   return Promise.all([
     probeOpenAIProvider({
       id: 'gemini',
@@ -151,13 +262,7 @@ export async function probeAllProviders(
       apiKey: env.GROQ_API_KEY,
       model: 'llama-3.1-8b-instant',
     }),
-    probeOpenAIProvider({
-      id: 'io-net',
-      name: 'io.net',
-      baseUrl: 'https://api.intelligence.io.solutions/api/v1',
-      apiKey: env.IO_API_KEY,
-      model: 'zai-org/GLM-5.3',
-    }),
+    ioNetCheck(),
     workersCheck(),
   ]);
 }
@@ -169,6 +274,7 @@ async function fetchOpenAIModelList(params: {
   apiKey?: string;
   prefix: string;
   filterFn?: (id: string) => boolean;
+  verifyAccess?: boolean;
 }): Promise<CatalogProvider> {
   if (!params.apiKey) {
     return {
@@ -202,9 +308,13 @@ async function fetchOpenAIModelList(params: {
     }
 
     const json = (await res.json()) as { data?: Array<{ id?: string }> };
-    const rawIds = (json.data || [])
+    let rawIds = (json.data || [])
       .map((m) => (m.id ?? '').replace(/^models\//, ''))
       .filter((id) => Boolean(id) && (!params.filterFn || params.filterFn(id)));
+
+    if (params.verifyAccess && rawIds.length > 0 && params.apiKey) {
+      rawIds = await findWorkingModels(params.baseUrl, params.apiKey, rawIds);
+    }
 
     const models = rawIds.slice(0, 24).map((id) => ({
       id: `${params.prefix}${id}`,
@@ -217,6 +327,9 @@ async function fetchOpenAIModelList(params: {
       configured: true,
       prefix: params.prefix,
       models,
+      ...(params.verifyAccess && models.length === 0
+        ? { error: 'Нет доступных бесплатных моделей на этом тарифе' }
+        : {}),
     };
   } catch (err) {
     return {
@@ -246,6 +359,7 @@ export async function getProvidersCatalog(
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       apiKey: env.GEMINI_API_KEY,
       prefix: 'gemini:',
+      verifyAccess: true,
       filterFn: (id) =>
         id.startsWith('gemini-') &&
         !id.includes('embedding') &&
@@ -259,6 +373,7 @@ export async function getProvidersCatalog(
       baseUrl: 'https://api.groq.com/openai/v1',
       apiKey: env.GROQ_API_KEY,
       prefix: 'groq:',
+      verifyAccess: true,
       filterFn: (id) => !id.includes('whisper') && !id.includes('guard'),
     }),
     fetchOpenAIModelList({
@@ -267,6 +382,7 @@ export async function getProvidersCatalog(
       baseUrl: 'https://api.intelligence.io.solutions/api/v1',
       apiKey: env.IO_API_KEY,
       prefix: 'io:',
+      verifyAccess: true,
     }),
   ]);
 
