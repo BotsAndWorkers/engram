@@ -1,124 +1,135 @@
 # Engram
 
-Персональный Telegram-ассистент, база знаний и система напоминаний на базе **Cloudflare Workers**, **Cloudflare D1 (SQLite + FTS5)** и **Workers AI**.
+Персональный AI-ассистент, база знаний и планировщик в Telegram на бесплатном стеке **Cloudflare Workers**, **Cloudflare D1 (SQLite + FTS5)**, **Cloudflare Vectorize** и **Workers AI** (с поддержкой внешних бесплатных LLM API).
 
 ## Возможности
 
-- **AI-чат с вызовами инструментов (Tool Calling):** работает через Cloudflare Workers AI (бесплатные 10 000 Neurons/день) или любой OpenAI-compatible API (Gemini, Groq, OpenRouter).
-- **База знаний (заметки):** сохранение, редактирование, удаление и полнотекстовый поиск (SQLite FTS5) с тегами.
-- **Напоминания:** одноразовые и повторяющиеся задачи по расписанию (Cloudflare Cron Triggers каждую минуту) с inline-кнопками "Выполнено", "+1 час", "+1 день".
-- **Долгосрочная память:** бот запоминает факты о пользователе и автоматически учитывает их в будущих диалогах.
-- **Веб-ридер:** извлечение текста по ссылке (`fetch_url`) для суммаризации и сохранения в заметки.
-- **Голосовые сообщения:** распознавание речи через Workers AI Whisper (`@cf/openai/whisper`).
-- **Безопасность:** проверка `X-Telegram-Bot-Api-Secret-Token` в constant-time, whitelist по `ALLOWED_USER_IDS`, дедупликация `update_id`.
+- **Мульти-провайдерный AI-роутер:** автоматическая цепочка `Gemini -> Groq -> io.net -> Cloudflare Workers AI` с переключением при лимитах или сбоях, потоковой печатью ответа и самодиагностикой (`check_llm_providers`, `list_available_models`, `switch_llm_model`).
+- **База знаний и заметки:** сохранение, редактирование, гибридный поиск (ключевые слова D1 FTS5 + семантический поиск Vectorize `@cf/baai/bge-m3`), экспорт всех заметок в Markdown (`/export`).
+- **Напоминания и проактивность:** одноразовые и повторяющиеся напоминания (Cron `* * * * *`), утренний дайджест, вечерний чек-ин и настройка тихих часов (`quiet_hours`).
+- **Интерактивные списки и трекеры:** чеклисты покупок/дел/фильмов (`/lists`) и учет расходов, привычек, тренировок из обычной переписки.
+- **Память в трех уровнях:** рабочее окно диалога, фоновое скользящее саммари с авто-извлечением фактов и долговременный эпизодический архив (`conversation_episodes` + FTS5).
+- **Мультимодальность и веб:**
+  - распознавание голосовых сообщений (Whisper) и голосовые ответы TTS (`/voice`);
+  - распознавание фото и скриншотов (Vision);
+  - индексация загруженных документов (`PDF`, `TXT`, `MD`, `CSV`, `JSON`, код);
+  - обработка пересланных постов с сохранением источника;
+  - бесплатный поиск в интернете (`web_search`) и чтение веб-страниц (`fetch_url`).
+- **Telegram Mini App (`/app`):** встроенный веб-интерфейс для просмотра и управления заметками, списками, задачами, трекерами, памятью и AI-моделями.
 
 ## Структура проекта
 
 ```text
 engram/
+├── .github/workflows/deploy.yml   # Автодеплой, миграции D1, секреты, webhook и меню
 ├── migrations/
-│   └── 0001_init.sql       # Схема D1 (messages, notes + FTS5, reminders, memories, user_settings)
+│   ├── 0001_init.sql              # Базовые таблицы и FTS5 для заметок
+│   ├── 0002_memory_summaries.sql  # Скользящие саммари и эпизодический архив
+│   ├── 0003_lists_and_briefing.sql# Интерактивные списки и утренний дайджест
+│   └── 0004_jarvis_upgrades.sql   # Документы, трекеры, тихие часы, чек-ины, TTS
 ├── src/
-│   ├── index.ts            # Точка входа: Hono webhook + scheduled cron
-│   ├── config/env.ts       # Типы окружения и парсинг ALLOWED_USER_IDS
-│   ├── db/                 # Запросы к D1 и типы строк
-│   ├── llm/                # Адаптеры Workers AI и OpenAI-compatible API
-│   ├── tools/              # Инструменты (notes, reminders, memory, web)
-│   ├── telegram/           # Клиент Telegram API, auth, команды, callback-кнопки
-│   ├── agent/runner.ts     # Агентный цикл (tool-calling loop)
-│   └── cron/reminders.ts   # Отправка сработавших напоминаний
-├── test/                   # Юнит-тесты (Vitest)
-└── wrangler.jsonc          # Конфигурация Cloudflare Workers
+│   ├── index.ts                   # Hono роутер (/webhook, /app, /health) и cron
+│   ├── agent/                     # Агентный цикл и фоновая компактификация
+│   ├── llm/                       # Провайдеры (Gemini/Groq/io.net/Workers AI), fallback, TTS, диагностика
+│   ├── tools/                     # Инструменты (notes, reminders, lists, documents, trackers, memory, web, infra)
+│   ├── db/                        # D1 запросы и типы
+│   ├── telegram/                  # Bot API клиент, auth, команды, UI и HTML-форматтер
+│   ├── cron/                      # Напоминания, утренний дайджест и вечерние чек-ины
+│   └── webapp/                    # Telegram Mini App UI и API с проверкой initData
+├── test/                          # Юнит-тесты (Vitest)
+└── wrangler.jsonc                 # Конфигурация Cloudflare Workers
 ```
 
-## Быстрый старт и деплой
+## Развертывание после форка (полная инструкция)
 
-### 1. Установка зависимостей
+### 1. Подготовка в Telegram
+
+1. Откройте `@BotFather` в Telegram и создайте бота командой `/newbot` — сохраните токен (`TELEGRAM_BOT_TOKEN`).
+2. Узнайте свой числовой Telegram ID (например, через `@userinfobot` -> `Id: ...`) — это будет `ALLOWED_USER_IDS`.
+3. Придумайте случайную строку из 24–32 латинских букв/цифр для защиты webhook (`TELEGRAM_WEBHOOK_SECRET`), например в PowerShell:
+   ```powershell
+   [guid]::NewGuid().ToString("N")
+   ```
+
+### 2. Создание ресурсов в Cloudflare
+
+Установите зависимости и авторизуйтесь в Wrangler:
 
 ```bash
 npm install
-```
-
-### 2. Создание бота в Telegram
-
-1. Откройте `@BotFather` в Telegram и выполните `/newbot`.
-2. Сохраните полученный `TELEGRAM_BOT_TOKEN`.
-3. Узнайте свой числовой Telegram ID (например, через `@userinfobot`).
-4. Придумайте случайную строку для `TELEGRAM_WEBHOOK_SECRET` (например, 32 символа).
-
-### 3. Создание базы данных Cloudflare D1
-
-```bash
 npx wrangler login
-npx wrangler d1 create engram-db
 ```
 
-Скопируйте `database_id` из вывода команды и вставьте его в `wrangler.jsonc` вместо `00000000-0000-0000-0000-000000000000`.
+1. **Создайте базу данных D1:**
+   ```bash
+   npx wrangler d1 create engram-db
+   ```
+   Скопируйте `database_id` из вывода команды и вставьте его в `wrangler.jsonc` в секцию `d1_databases[0].database_id`.
 
-Примените миграцию:
+2. **Создайте индекс Vectorize для семантического поиска:**
+   ```bash
+   npx wrangler vectorize create engram-notes --dimensions=1024 --metric=cosine
+   ```
 
-```bash
-npm run db:migrate:remote
-```
+3. **Получите `CLOUDFLARE_ACCOUNT_ID` и `CLOUDFLARE_API_TOKEN`:**
+   - **Account ID:** виден в URL дашборда Cloudflare (`dash.cloudflare.com/<ACCOUNT_ID>/home`) или в разделе **Compute -> Workers & Pages**.
+   - **API Token:** откройте **My Profile -> API Tokens -> Create Token -> шаблон "Edit Cloudflare Workers"** и добавьте в `Account policy` разрешение **D1: Edit**.
 
-### 4. Добавление секретов в Cloudflare
+### 3. Бесплатные LLM-ключи (рекомендуется)
 
-```bash
-npx wrangler secret put TELEGRAM_BOT_TOKEN
-npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
-npx wrangler secret put ALLOWED_USER_IDS
-```
+Бот умеет работать только на встроенном **Cloudflare Workers AI** (бесплатно 10 000 Neurons/день), но при активном общении лимит можно быстро исчерпать. Рекомендуется добавить хотя бы один внешний бесплатный ключ:
 
-В `ALLOWED_USER_IDS` укажите ваш Telegram ID (или несколько через запятую).
+- `GEMINI_API_KEY` — Google AI Studio (`aistudio.google.com` -> **Get API key**).
+- `GROQ_API_KEY` — Groq Console (`console.groq.com` -> **API Keys**).
+- `IO_API_KEY` — io.net (`ai.io.net` -> **IO Intelligence -> API Keys**).
+
+### 4. Настройка GitHub Secrets
+
+В вашем форке на GitHub откройте **Settings -> Secrets and variables -> Actions -> New repository secret** и добавьте:
+
+| Секрет | Обязательно | Описание |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | Да | API-токен Cloudflare (Workers + D1) |
+| `CLOUDFLARE_ACCOUNT_ID` | Да | ID аккаунта Cloudflare |
+| `TELEGRAM_BOT_TOKEN` | Да | Токен бота от `@BotFather` |
+| `TELEGRAM_WEBHOOK_SECRET` | Да | Случайная строка для проверки webhook |
+| `ALLOWED_USER_IDS` | Да | Ваш числовой Telegram ID (можно несколько через запятую) |
+| `GEMINI_API_KEY` | Нет | Ключ Google AI Studio |
+| `GROQ_API_KEY` | Нет | Ключ Groq API |
+| `IO_API_KEY` | Нет | Ключ io.net IO Intelligence |
 
 ### 5. Деплой
 
-Вручную:
+Закоммитьте ваш `database_id` в `wrangler.jsonc` и отправьте изменения в ветку `main` (или запустите workflow **Deploy Engram** вручную во вкладке **Actions**).
 
-```bash
-npm run deploy
-```
+GitHub Actions автоматически:
+1. Проверит TypeScript и прогонит тесты (`npm test`).
+2. Применит все SQL-миграции к вашей D1 (`wrangler d1 migrations apply`).
+3. Задеплоит Worker и автоматически определит ваш `*.workers.dev` URL.
+4. Загрузит секреты в Cloudflare Worker (`wrangler secret bulk`).
+5. Зарегистрирует Telegram webhook, список команд (`/setMyCommands`) и кнопку Mini App в меню (`/setChatMenuButton`).
 
-Либо через Git (рекомендуется):
-1. Отправьте код в репозиторий `BotsAndWorkers/engram`.
-2. В панели Cloudflare перейдите в **Workers & Pages -> Create -> Import a repository** и выберите `BotsAndWorkers/engram`.
-3. В настройках сборки укажите:
-   - Build command: `npm run db:migrate:remote` (или накатывайте миграции вручную перед пушем новых SQL-файлов)
-   - Deploy command: `npx wrangler deploy`
-4. Добавьте секреты (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `ALLOWED_USER_IDS`) в настройках воркера **Settings -> Variables and Secrets**.
-
-### 6. Регистрация Telegram Webhook
-
-После деплоя выполните запрос (подставив ваш токен, URL воркера и секрет):
-
-```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://engram.<your-subdomain>.workers.dev/webhook",
-    "secret_token": "<TELEGRAM_WEBHOOK_SECRET>"
-  }'
-```
-
-Проверить здоровье воркера можно по адресу `https://engram.<your-subdomain>.workers.dev/health`.
+После зеленого статуса в **Actions** откройте своего бота в Telegram и отправьте `/start`.
 
 ## Команды бота
 
-- `/start` — краткая справка
-- `/help` — список команд и примеры запросов
-- `/notes [запрос]` — последние заметки или поиск по базе
-- `/reminders` — список активных напоминаний
+- `/menu` — главное интерактивное меню
+- `/app` — открыть Telegram Mini App
+- `/notes [запрос]` — заметки и поиск
+- `/reminders` — активные и выполненные напоминания
+- `/lists` — интерактивные списки и чеклисты
 - `/memory` — сохраненные факты долгосрочной памяти
-- `/model [id | reset]` — посмотреть или сменить модель LLM
-- `/tz [Asia/Novosibirsk]` — посмотреть или сменить часовой пояс
-- `/clear` — очистить историю текущего диалога
+- `/voice [off | voice | always]` — режим голосовых ответов
+- `/export` — экспорт всех заметок в `.md` файл
+- `/model [id | reset]` — управление моделью AI
+- `/tz [IANA_timezone]` — часовой пояс (например `Europe/Moscow`)
+- `/clear` — очистить историю текущего диалога (заметки, архив и память сохраняются)
+- `/help` — справка
 
-## Переключение на внешний LLM (опционально)
+## Локальная разработка
 
-По умолчанию используется Cloudflare Workers AI. Чтобы переключиться на Gemini API, Groq или OpenRouter:
-
-1. В `wrangler.jsonc` поменяйте `LLM_PROVIDER` на `"openai-compatible"`.
-2. Добавьте секреты:
-   - `LLM_API_KEY`
-   - `LLM_BASE_URL` (например, `https://generativelanguage.googleapis.com/v1beta/openai`)
-   - `LLM_MODEL` (например, `gemini-2.5-flash`)
+```bash
+cp .dev.vars.example .dev.vars
+npm run db:migrate:local
+npm run dev
+```

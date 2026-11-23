@@ -55,6 +55,7 @@ export async function handleCallbackQuery(
   env: AppEnv,
   telegram: TelegramClient,
   query: TelegramCallbackQuery,
+  appUrl?: string,
 ): Promise<void> {
   const data = query.data ?? '';
   const userId = query.from.id;
@@ -73,7 +74,7 @@ export async function handleCallbackQuery(
           telegram,
           chatId,
           messageId,
-          await buildHomeScreen(env, userId),
+          await buildHomeScreen(env, userId, appUrl),
         );
         return;
       }
@@ -161,7 +162,7 @@ export async function handleCallbackQuery(
           telegram,
           chatId,
           messageId,
-          await buildHomeScreen(env, userId),
+          await buildHomeScreen(env, userId, appUrl),
         );
         return;
       }

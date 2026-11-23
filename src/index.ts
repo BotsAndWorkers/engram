@@ -79,7 +79,8 @@ app.post('/webhook', async (c) => {
     return c.json({ ok: true, duplicate: true });
   }
 
-  c.executionCtx.waitUntil(handleUpdate(c.env, update));
+  const appUrl = `${new URL(c.req.url).origin}/app`;
+  c.executionCtx.waitUntil(handleUpdate(c.env, update, appUrl));
   return c.json({ ok: true });
 });
 
@@ -121,12 +122,13 @@ async function extractDocumentText(
 async function handleUpdate(
   env: AppEnv,
   update: TelegramUpdate,
+  appUrl: string,
 ): Promise<void> {
   const telegram = new TelegramClient(env.TELEGRAM_BOT_TOKEN);
 
   if (update.callback_query) {
     try {
-      await handleCallbackQuery(env, telegram, update.callback_query);
+      await handleCallbackQuery(env, telegram, update.callback_query, appUrl);
     } catch (err) {
       console.error('Callback query error', err);
     }
@@ -253,6 +255,7 @@ async function handleUpdate(
       userId,
       chatId,
       text: userText,
+      appUrl,
     });
     if (handledCommand) return;
 

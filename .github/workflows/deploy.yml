@@ -37,24 +37,35 @@ jobs:
         run: npx wrangler d1 migrations apply engram-db --remote
 
       - name: Deploy Worker
+        id: deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy
+        run: |
+          OUTPUT=$(npx wrangler deploy)
+          echo "$OUTPUT"
+          WORKER_URL=$(echo "$OUTPUT" | grep -Eo 'https://[a-zA-Z0-9.-]+\.workers\.dev' | head -n1)
+          if [ -z "$WORKER_URL" ]; then
+            echo "Could not detect workers.dev URL from wrangler output"
+            exit 1
+          fi
+          echo "worker_url=$WORKER_URL" >> "$GITHUB_OUTPUT"
 
       - name: Register Telegram webhook and menu commands
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          WORKER_URL: ${{ steps.deploy.outputs.worker_url }}
         run: |
           node -e '
           (async () => {
             const base = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+            const workerUrl = process.env.WORKER_URL;
             const whRes = await fetch(`${base}/setWebhook`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                url: "https://engram.liam3301j.workers.dev/webhook",
+                url: `${workerUrl}/webhook`,
                 secret_token: process.env.TELEGRAM_WEBHOOK_SECRET,
               }),
             });
@@ -93,7 +104,7 @@ jobs:
                 menu_button: {
                   type: "web_app",
                   text: "Engram",
-                  web_app: { url: "https://engram.liam3301j.workers.dev/app" }
+                  web_app: { url: `${workerUrl}/app` }
                 }
               }),
             });

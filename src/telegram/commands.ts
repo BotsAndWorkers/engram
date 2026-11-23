@@ -53,6 +53,7 @@ export interface CommandContext {
   userId: number;
   chatId: number;
   text: string;
+  appUrl?: string;
 }
 
 function isValidTimezone(tz: string): boolean {
@@ -75,7 +76,7 @@ export async function handleSlashCommand(ctx: CommandContext): Promise<boolean> 
   switch (cmd) {
     case '/start':
     case '/menu': {
-      const screen = await buildHomeScreen(ctx.env, ctx.userId);
+      const screen = await buildHomeScreen(ctx.env, ctx.userId, ctx.appUrl);
       await ctx.telegram.sendMessage(ctx.chatId, screen.text, {
         replyMarkup: screen.replyMarkup,
       });
@@ -251,6 +252,13 @@ export async function handleSlashCommand(ctx: CommandContext): Promise<boolean> 
     }
 
     case '/app': {
+      if (!ctx.appUrl) {
+        await ctx.telegram.sendMessage(
+          ctx.chatId,
+          'URL Mini App недоступен в текущем контексте.',
+        );
+        return true;
+      }
       await ctx.telegram.sendMessage(
         ctx.chatId,
         'Открой Mini App для удобной работы с заметками, списками, напоминаниями и трекерами:',
@@ -260,7 +268,7 @@ export async function handleSlashCommand(ctx: CommandContext): Promise<boolean> 
               [
                 {
                   text: 'Открыть Mini App',
-                  web_app: { url: 'https://engram.liam3301j.workers.dev/app' },
+                  web_app: { url: ctx.appUrl },
                 },
               ],
             ],

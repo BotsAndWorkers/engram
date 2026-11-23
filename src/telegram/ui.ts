@@ -79,6 +79,7 @@ const NOTES_PAGE_SIZE = 5;
 export async function buildHomeScreen(
   env: AppEnv,
   userId: number,
+  appUrl?: string,
 ): Promise<ScreenView> {
   const [settings, stats] = await Promise.all([
     getUserSettings(env.DB, userId),
@@ -124,12 +125,16 @@ export async function buildHomeScreen(
         { text: 'Справка', callback_data: 'menu:help' },
         { text: 'Очистить чат', callback_data: 'menu:clear_ask' },
       ],
-      [
-        {
-          text: 'Mini App',
-          web_app: { url: 'https://engram.liam3301j.workers.dev/app' },
-        },
-      ],
+      ...(appUrl
+        ? [
+            [
+              {
+                text: 'Mini App',
+                web_app: { url: appUrl },
+              },
+            ],
+          ]
+        : []),
     ],
   };
 
