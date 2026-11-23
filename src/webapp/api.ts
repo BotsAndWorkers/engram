@@ -519,10 +519,136 @@ webAppRoutes.post('/api/models/check', async (c) => {
       name: 'io.net',
       baseUrl: 'https://api.intelligence.io.solutions/api/v1',
       apiKey: c.env.IO_API_KEY,
-      model: 'meta-llama/Llama-3.3-70B-Instruct',
+      model: 'zai-org/GLM-5.3',
     }),
     workersCheck(),
   ]);
 
   return c.json({ results });
+});
+
+interface CatalogProvider {
+  id: string;
+  name: string;
+  configured: boolean;
+  prefix: string;
+  models: Array<{ id: string; label: string }>;
+  error?: string;
+}
+
+async function fetchOpenAIModelList(params: {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey?: string;
+  prefix: string;
+  filterFn?: (id: string) => boolean;
+}): Promise<CatalogProvider> {
+  if (!params.apiKey) {
+    return {
+      id: params.id,
+      name: params.name,
+      configured: false,
+      prefix: params.prefix,
+      models: [],
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`${params.baseUrl.replace(/\/$/, '')}/models`, {
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        'User-Agent': 'engram-bot/1.0',
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      return {
+        id: params.id,
+        name: params.name,
+        configured: true,
+        prefix: params.prefix,
+        models: [],
+        error: `HTTP ${res.status}`,
+      };
+    }
+
+    const json = (await res.json()) as { data?: Array<{ id?: string }> };
+    const rawIds = (json.data || [])
+      .map((m) => (m.id ?? '').replace(/^models\//, ''))
+      .filter((id) => Boolean(id) && (!params.filterFn || params.filterFn(id)));
+
+    const models = rawIds.slice(0, 24).map((id) => ({
+      id: `${params.prefix}${id}`,
+      label: id,
+    }));
+
+    return {
+      id: params.id,
+      name: params.name,
+      configured: true,
+      prefix: params.prefix,
+      models,
+    };
+  } catch (err) {
+    return {
+      id: params.id,
+      name: params.name,
+      configured: true,
+      prefix: params.prefix,
+      models: [],
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+webAppRoutes.get('/api/models/catalog', async (c) => {
+  const workersModels = MODEL_PRESETS.filter((m) =>
+    m.id.startsWith('@cf/'),
+  ).map((m) => ({ id: m.id, label: m.label }));
+
+  const [gemini, groq, ioNet] = await Promise.all([
+    fetchOpenAIModelList({
+      id: 'gemini',
+      name: 'Google Gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      apiKey: c.env.GEMINI_API_KEY,
+      prefix: 'gemini:',
+      filterFn: (id) =>
+        id.startsWith('gemini-') &&
+        !id.includes('embedding') &&
+        !id.includes('imagen') &&
+        !id.includes('veo') &&
+        !id.includes('tts'),
+    }),
+    fetchOpenAIModelList({
+      id: 'groq',
+      name: 'Groq',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      apiKey: c.env.GROQ_API_KEY,
+      prefix: 'groq:',
+      filterFn: (id) => !id.includes('whisper') && !id.includes('guard'),
+    }),
+    fetchOpenAIModelList({
+      id: 'io-net',
+      name: 'io.net',
+      baseUrl: 'https://api.intelligence.io.solutions/api/v1',
+      apiKey: c.env.IO_API_KEY,
+      prefix: 'io:',
+    }),
+  ]);
+
+  const workersAi: CatalogProvider = {
+    id: 'workers-ai',
+    name: 'Cloudflare Workers AI',
+    configured: true,
+    prefix: '',
+    models: workersModels,
+  };
+
+  return c.json({ providers: [gemini, groq, ioNet, workersAi] });
 });

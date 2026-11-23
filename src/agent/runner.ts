@@ -82,6 +82,7 @@ export function buildSystemPrompt(
   timezone: string,
   memories: MemoryRow[],
   rollingSummary?: string | null,
+  activeModelInfo?: string,
 ): string {
   const memoryBlock =
     memories.length > 0
@@ -104,6 +105,7 @@ export function buildSystemPrompt(
     '<context>',
     `Current local date & time: ${formatCurrentDateTimeWithOffset(timezone)}`,
     `User timezone: ${timezone}`,
+    ...(activeModelInfo ? [`Active engine: ${activeModelInfo}`] : []),
     '</context>',
     '',
     '<capabilities>',
@@ -226,7 +228,12 @@ export async function runAgentTurn(params: {
   const conversation: ChatMessage[] = [
     {
       role: 'system',
-      content: buildSystemPrompt(timezone, memories, chatSummary?.summary),
+      content: buildSystemPrompt(
+        timezone,
+        memories,
+        chatSummary?.summary,
+        `${llm.name} (${llm.model})`,
+      ),
     },
     ...hydrateHistory(historyRows),
     { role: 'user', content: userText },

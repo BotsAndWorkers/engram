@@ -564,6 +564,9 @@ export function renderMiniAppHtml(): string {
       };
       let probeResults = null;
       let probing = false;
+      let modelCatalog = null;
+      let loadingCatalog = false;
+      const expandedProviders = new Set(['io-net']);
 
       function haptic(type) {
         try {
@@ -768,46 +771,100 @@ export function renderMiniAppHtml(): string {
       function renderModels() {
         const s = state.settings || {};
         const current = s.modelOverride || 'auto';
-        const presets = s.presets || [];
         const p = s.providers || {};
 
-        let html = '<div class="section-head"><span class="section-title">Активная модель</span></div>';
-        html += '<div class="chip-row" style="margin:0 0 14px">' +
-          '<button class="btn-mini ' + (current === 'auto' ? 'accent' : '') + '" data-select-model="auto">Авто (Gemini -> Groq -> io.net)</button>' +
-          presets.map((m) =>
-            '<button class="btn-mini ' + (current === m.id ? 'accent' : '') + '" data-select-model="' + esc(m.id) + '">' + esc(m.label) + '</button>'
-          ).join('') +
+        let html = '<div class="section-head"><span class="section-title">Режим работы AI</span></div>';
+        html += '<div class="card" style="margin-bottom:14px">' +
+          '<div class="card-row">' +
+            '<div>' +
+              '<div class="card-title">Автоматический роутер</div>' +
+              '<div class="card-meta">' + (current === 'auto' ? 'Активен: Gemini -> Groq -> io.net -> Workers AI' : 'Выбрана вручную: ' + esc(current)) + '</div>' +
+            '</div>' +
+            '<button class="btn-mini ' + (current === 'auto' ? 'accent' : '') + '" data-select-model="auto">' + (current === 'auto' ? 'Активно' : 'Включить Авто') + '</button>' +
+          '</div>' +
         '</div>';
 
-        html += '<div class="section-head"><span class="section-title">Статус ключей и лимитов</span>' +
+        html += '<div class="section-head">' +
+          '<span class="section-title">Поставщики и модели</span>' +
           '<button class="btn-mini accent" id="probeBtn"' + (probing ? ' disabled' : '') + '>' + (probing ? 'Проверка...' : 'Проверить сейчас') + '</button>' +
         '</div>';
 
-        if (!probeResults) {
-          const baseList = [
-            { name: 'Google Gemini', ok: p.gemini },
-            { name: 'Groq', ok: p.groq },
-            { name: 'io.net', ok: p.ioNet },
-            { name: 'Cloudflare Workers AI', ok: true },
-          ];
-          html += baseList.map((item) => (
-            '<div class="card"><div class="card-row"><div>' +
-              '<div class="card-title">' + esc(item.name) + '</div>' +
-              '<div class="card-meta">' + (item.ok ? 'Ключ настроен. Нажми "Проверить сейчас" для теста и лимитов.' : 'Ключ не добавлен в секреты') + '</div>' +
-            '</div></div></div>'
-          )).join('');
-        } else {
-          html += probeResults.map((r) => (
-            '<div class="card"><div class="card-row"><div>' +
-              '<div class="card-title">' + esc(r.name) + '</div>' +
-              '<div class="card-meta">' + esc(r.details) + (r.latencyMs !== null ? ' · ' + r.latencyMs + ' ms' : '') + '</div>' +
-            '</div>' +
-            '<span class="' + (r.ok ? 'chip' : 'badge-warn') + '">' + (r.ok ? 'OK' : 'Ошибка') + '</span>' +
-            '</div></div>'
-          )).join('');
-        }
+        const providersList = modelCatalog || [
+          { id: 'gemini', name: 'Google Gemini', configured: p.gemini, models: [] },
+          { id: 'groq', name: 'Groq', configured: p.groq, models: [] },
+          { id: 'io-net', name: 'io.net', configured: p.ioNet, models: [] },
+          { id: 'workers-ai', name: 'Cloudflare Workers AI', configured: true, models: s.presets || [] },
+        ];
+
+        const probeMap = new Map((probeResults || []).map((r) => [r.id, r]));
+
+        html += providersList.map((prov) => {
+          const probe = probeMap.get(prov.id);
+          const isOpen = expandedProviders.has(prov.id);
+          const modelsCount = (prov.models || []).length;
+
+          let statusText = prov.configured ? 'Ключ настроен' : 'Ключ не добавлен';
+          if (probe) {
+            statusText = probe.details + (probe.latencyMs !== null ? ' · ' + probe.latencyMs + ' ms' : '');
+          } else if (prov.error) {
+            statusText = 'Каталог: ' + prov.error;
+          }
+
+          let badgeHtml = '';
+          if (probe) {
+            badgeHtml = '<span class="' + (probe.ok ? 'chip' : 'badge-warn') + '">' + (probe.ok ? 'OK' : 'Ошибка') + '</span>';
+          } else if (prov.configured) {
+            badgeHtml = '<span class="chip">' + (loadingCatalog && !modelCatalog ? '...' : modelsCount + ' мод.') + '</span>';
+          }
+
+          let modelsHtml = '';
+          if (isOpen) {
+            if (!prov.configured) {
+              modelsHtml = '<div class="card-meta" style="margin-top:8px">Добавь API-ключ в GitHub Secrets.</div>';
+            } else if (!modelsCount) {
+              modelsHtml = '<div class="card-meta" style="margin-top:8px">' + (loadingCatalog ? 'Загрузка списка моделей...' : 'Список моделей недоступен' + (prov.error ? ' (' + esc(prov.error) + ')' : '')) + '</div>';
+            } else {
+              modelsHtml = '<div class="chip-row" style="margin-top:10px">' +
+                prov.models.map((m) =>
+                  '<button class="btn-mini ' + (current === m.id ? 'accent' : '') + '" data-select-model="' + esc(m.id) + '">' + esc(m.label) + '</button>'
+                ).join('') +
+              '</div>';
+            }
+          }
+
+          return (
+            '<div class="card">' +
+              '<div class="card-row" data-toggle-provider="' + esc(prov.id) + '" style="cursor:pointer">' +
+                '<div>' +
+                  '<div class="card-title">' + esc(prov.name) + '</div>' +
+                  '<div class="card-meta">' + esc(statusText) + '</div>' +
+                '</div>' +
+                '<div class="card-actions">' +
+                  badgeHtml +
+                  '<button class="btn-mini" data-toggle-provider="' + esc(prov.id) + '">' + (isOpen ? 'Скрыть' : 'Модели') + '</button>' +
+                '</div>' +
+              '</div>' +
+              modelsHtml +
+            '</div>'
+          );
+        }).join('');
 
         return html;
+      }
+
+      async function loadModelCatalog() {
+        if (loadingCatalog) return;
+        loadingCatalog = true;
+        render();
+        try {
+          const res = await api('/api/models/catalog');
+          modelCatalog = res.providers || [];
+        } catch (err) {
+          showError(err.message);
+        } finally {
+          loadingCatalog = false;
+          render();
+        }
       }
 
       function setTab(tab) {
@@ -816,7 +873,11 @@ export function renderMiniAppHtml(): string {
           el.classList.toggle('active', el.getAttribute('data-tab') === tab);
         }
         fabBtn.style.display = (tab === 'memory' || tab === 'models') ? 'none' : 'grid';
-        render();
+        if (tab === 'models' && !modelCatalog) {
+          loadModelCatalog();
+        } else {
+          render();
+        }
       }
 
       function render() {
@@ -1032,6 +1093,16 @@ export function renderMiniAppHtml(): string {
             haptic('light');
             render();
           } catch (err) { showError(err.message); }
+          return;
+        }
+
+        const toggleProv = e.target.closest('[data-toggle-provider]');
+        if (toggleProv) {
+          const id = toggleProv.getAttribute('data-toggle-provider');
+          if (expandedProviders.has(id)) expandedProviders.delete(id);
+          else expandedProviders.add(id);
+          haptic('light');
+          render();
           return;
         }
 
