@@ -17,7 +17,7 @@ export function createLLMProvider(
         env.LLM_BASE_URL ||
           'https://generativelanguage.googleapis.com/v1beta/openai',
         env.LLM_API_KEY,
-        modelOverride || env.LLM_MODEL || 'gemini-2.5-flash',
+        modelOverride || env.LLM_MODEL || 'gemini-3.5-flash-lite',
       ),
     );
   }
@@ -35,7 +35,7 @@ export function createLLMProvider(
         env.GEMINI_API_KEY,
         modelOverride && modelOverride.startsWith('gemini-')
           ? modelOverride
-          : 'gemini-2.5-flash',
+          : 'gemini-3.5-flash-lite',
       ),
     );
   }

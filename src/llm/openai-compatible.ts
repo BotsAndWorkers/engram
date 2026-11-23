@@ -57,6 +57,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
+        'User-Agent': 'engram-bot/1.0',
       },
       body: JSON.stringify(body),
     });
@@ -111,6 +112,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
+        'User-Agent': 'engram-bot/1.0',
       },
       body: JSON.stringify(body),
     });

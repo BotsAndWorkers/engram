@@ -386,6 +386,7 @@ async function probeOpenAIProvider(params: {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${params.apiKey}`,
+          'User-Agent': 'engram-bot/1.0',
         },
         body: JSON.stringify({
           model: params.model,
@@ -476,7 +477,7 @@ webAppRoutes.post('/api/models/check', async (c) => {
       name: 'Google Gemini',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       apiKey: c.env.GEMINI_API_KEY,
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.5-flash-lite',
     }),
     probeOpenAIProvider({
       id: 'groq',

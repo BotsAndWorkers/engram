@@ -18,12 +18,12 @@ export interface ScreenView {
 }
 
 export const MODEL_PRESETS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Lite' },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
   { id: '@cf/google/gemma-4-26b-a4b-it', label: 'Gemma 4 26B' },
   { id: '@cf/deepseek-ai/deepseek-v4.1-flash-1017', label: 'DeepSeek V4.1' },
   { id: '@cf/qwen/qwen3.8-27b', label: 'Qwen 3.8 27B' },
   { id: '@cf/meta/llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout' },
-  { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', label: 'Llama 3.3 70B' },
 ];
 
 export const TIMEZONE_PRESETS: ReadonlyArray<{ id: string; label: string }> = [
@@ -88,7 +88,7 @@ export async function buildHomeScreen(
   const model =
     settings?.model_override ||
     (env.GEMINI_API_KEY
-      ? 'gemini-2.5-flash (Авто)'
+      ? 'gemini-3.5-flash-lite (Авто)'
       : env.WORKERS_AI_MODEL || '@cf/google/gemma-4-26b-a4b-it');
   const timezone = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
   const modelLabel = MODEL_PRESETS.find((m) => m.id === model)?.label ?? model;
