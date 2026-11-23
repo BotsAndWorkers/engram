@@ -1,5 +1,6 @@
 import type { ToolDefinition } from '../llm/types';
 import { documentTools } from './documents';
+import { infraTools } from './infra';
 import { listTools } from './lists';
 import { memoryTools } from './memory';
 import { noteTools } from './notes';
@@ -14,6 +15,7 @@ const ALL_TOOLS: RegisteredTool[] = [
   ...listTools,
   ...documentTools,
   ...trackerTools,
+  ...infraTools,
   ...memoryTools,
   ...webTools,
 ];

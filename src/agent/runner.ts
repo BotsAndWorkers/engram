@@ -46,6 +46,9 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   search_past_conversations: 'Ищу в архиве диалогов...',
   fetch_url: 'Читаю страницу по ссылке...',
   web_search: 'Ищу в интернете...',
+  check_llm_providers: 'Проверяю статус провайдеров...',
+  list_available_models: 'Смотрю каталог моделей...',
+  switch_llm_model: 'Переключаю модель...',
 };
 
 const SILENT_TOOLS = new Set(['remember_fact', 'forget_fact']);
@@ -115,6 +118,7 @@ export function buildSystemPrompt(
     '- Documents & Files: index and search uploaded PDF, TXT, MD, CSV, JSON, and code files.',
     '- Memory & Archive: silently remember personal facts and search past conversation summaries.',
     '- Multimodal & Web: understand voice messages (and reply by voice via /voice), photos/screenshots, forwarded posts, search the web, and read URLs.',
+    '- Self-Diagnostics & Model Control: check live provider status/rate limits (check_llm_providers), inspect available models (list_available_models), and switch active model/provider on request (switch_llm_model).',
     '- Mini App: visual dashboard inside Telegram via /app or /menu.',
     '</capabilities>',
     '',
@@ -321,6 +325,7 @@ export async function runAgentTurn(params: {
         userId,
         chatId,
         timezone,
+        env,
         ai: env.AI,
         vectorize: env.VECTORIZE,
         embeddingModel: env.WORKERS_AI_EMBEDDING_MODEL,
