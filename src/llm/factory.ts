@@ -1,15 +1,9 @@
 import type { AppEnv } from '../config/env';
+import { DynamicOpenAIProvider } from './dynamic-openai';
 import { FallbackLLMProvider } from './fallback';
 import { OpenAICompatibleProvider } from './openai-compatible';
 import type { LLMProvider } from './types';
 import { WorkersAIProvider } from './workers-ai';
-
-const IO_NET_DEFAULT_MODELS = [
-  'nvidia/nemotron-3.5-super-vl',
-  'zai-org/GLM-5.3',
-  'deepseek-ai/DeepSeek-V4-Pro-0813',
-  'moonshotai/Kimi-K3',
-];
 
 function parseModelOverride(override?: string | null): {
   provider?: 'gemini' | 'groq' | 'io' | 'workers-ai';
@@ -78,40 +72,43 @@ export function createLLMProvider(
 
   if (env.GEMINI_API_KEY) {
     chain.push(
-      new OpenAICompatibleProvider(
+      new DynamicOpenAIProvider(
         'gemini',
         'https://generativelanguage.googleapis.com/v1beta/openai',
         env.GEMINI_API_KEY,
         parsed.provider === 'gemini' && parsed.model
           ? parsed.model
           : 'gemini-3.5-flash-lite',
+        (id) =>
+          id.startsWith('gemini-') &&
+          !id.includes('embedding') &&
+          !id.includes('imagen') &&
+          !id.includes('veo') &&
+          !id.includes('tts'),
       ),
     );
   }
 
   if (env.GROQ_API_KEY && parsed.provider !== 'groq') {
     chain.push(
-      new OpenAICompatibleProvider(
+      new DynamicOpenAIProvider(
         'groq',
         'https://api.groq.com/openai/v1',
         env.GROQ_API_KEY,
-        'qwen/qwen3.8-27b',
+        undefined,
+        (id) => !id.includes('whisper') && !id.includes('guard'),
       ),
     );
   }
 
-  if (env.IO_API_KEY) {
-    for (const ioModel of IO_NET_DEFAULT_MODELS) {
-      if (parsed.provider === 'io' && parsed.model === ioModel) continue;
-      chain.push(
-        new OpenAICompatibleProvider(
-          'io-net',
-          'https://api.intelligence.io.solutions/api/v1',
-          env.IO_API_KEY,
-          ioModel,
-        ),
-      );
-    }
+  if (env.IO_API_KEY && parsed.provider !== 'io') {
+    chain.push(
+      new DynamicOpenAIProvider(
+        'io-net',
+        'https://api.intelligence.io.solutions/api/v1',
+        env.IO_API_KEY,
+      ),
+    );
   }
 
   if (parsed.provider !== 'workers-ai') {
