@@ -85,6 +85,21 @@ jobs:
             const cmdData = await cmdRes.json();
             console.log("setMyCommands:", cmdData.ok, cmdData.description);
             if (!cmdRes.ok || !cmdData.ok) process.exit(1);
+
+            const menuBtnRes = await fetch(`${base}/setChatMenuButton`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                menu_button: {
+                  type: "web_app",
+                  text: "Engram",
+                  web_app: { url: "https://engram.liam3301j.workers.dev/app" }
+                }
+              }),
+            });
+            const menuBtnData = await menuBtnRes.json();
+            console.log("setChatMenuButton:", menuBtnData.ok, menuBtnData.description);
+            if (!menuBtnRes.ok || !menuBtnData.ok) process.exit(1);
           })();
           '
 

@@ -1,11 +1,16 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../config/env';
 import {
+  addListItems,
+  addTrackerEntry,
   completeReminder,
   createNote,
+  createReminder,
+  deleteMemoryById,
   deleteNote,
   getListItems,
   getTrackerSummary,
+  getUserSettings,
   listMemories,
   listRecentDocuments,
   listRecentNotes,
@@ -219,4 +224,97 @@ webAppRoutes.post('/api/reminders/:id/done', async (c) => {
     return c.json({ error: 'Reminder not found' }, 404);
   }
   return c.json({ ok: true });
+});
+
+webAppRoutes.post('/api/reminders', async (c) => {
+  const userId = c.get('userId');
+  let body: { text?: unknown; inMinutes?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  const mins = Number(body.inMinutes ?? 60);
+  if (!text) return c.json({ error: 'text is required' }, 400);
+  if (!Number.isFinite(mins) || mins <= 0) {
+    return c.json({ error: 'Positive inMinutes required' }, 400);
+  }
+
+  const settings = await getUserSettings(c.env.DB, userId);
+  const reminder = await createReminder(c.env.DB, {
+    userId,
+    chatId: settings?.chat_id ?? userId,
+    text,
+    dueAt: Date.now() + Math.round(mins * 60_000),
+  });
+  return c.json({ ok: true, reminder }, 201);
+});
+
+webAppRoutes.post('/api/lists', async (c) => {
+  const userId = c.get('userId');
+  let body: { listName?: unknown; text?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  const listName =
+    typeof body.listName === 'string' && body.listName.trim()
+      ? body.listName.trim()
+      : 'покупки';
+  if (!text) return c.json({ error: 'text is required' }, 400);
+
+  const items = await addListItems(c.env.DB, userId, listName, [text]);
+  return c.json({ ok: true, item: items[0] ?? null }, 201);
+});
+
+webAppRoutes.post('/api/trackers', async (c) => {
+  const userId = c.get('userId');
+  let body: {
+    category?: unknown;
+    label?: unknown;
+    amount?: unknown;
+    unit?: unknown;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  const category =
+    typeof body.category === 'string' && body.category.trim()
+      ? body.category.trim()
+      : 'расходы';
+  const label = typeof body.label === 'string' ? body.label.trim() : '';
+  if (!label) return c.json({ error: 'label is required' }, 400);
+
+  const amount =
+    body.amount !== undefined && body.amount !== '' && Number.isFinite(Number(body.amount))
+      ? Number(body.amount)
+      : null;
+  const unit = typeof body.unit === 'string' ? body.unit.trim() : null;
+
+  const entry = await addTrackerEntry(c.env.DB, {
+    userId,
+    category,
+    label,
+    amount,
+    unit,
+  });
+  return c.json({ ok: true, entry }, 201);
+});
+
+webAppRoutes.delete('/api/memories/:id', async (c) => {
+  const userId = c.get('userId');
+  const memId = Number.parseInt(c.req.param('id'), 10);
+  if (!Number.isFinite(memId) || memId <= 0) {
+    return c.json({ error: 'Invalid memory id' }, 400);
+  }
+  const deleted = await deleteMemoryById(c.env.DB, userId, memId);
+  return c.json({ ok: deleted });
 });
