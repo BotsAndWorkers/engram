@@ -6,6 +6,9 @@ export interface AppSecrets {
   LLM_API_KEY?: string;
   LLM_BASE_URL?: string;
   LLM_MODEL?: string;
+  GEMINI_API_KEY?: string;
+  GROQ_API_KEY?: string;
+  IO_API_KEY?: string;
 }
 
 export type AppEnv = Omit<Env, 'LLM_PROVIDER'> & AppSecrets;

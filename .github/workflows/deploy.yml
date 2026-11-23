@@ -110,5 +110,18 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
           ALLOWED_USER_IDS: ${{ secrets.ALLOWED_USER_IDS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          IO_API_KEY: ${{ secrets.IO_API_KEY }}
         run: |
-          node -e "console.log(JSON.stringify({ TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET, ALLOWED_USER_IDS: process.env.ALLOWED_USER_IDS }))" | npx wrangler secret bulk
+          node -e '
+          const secrets = {
+            TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+            TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET,
+            ALLOWED_USER_IDS: process.env.ALLOWED_USER_IDS,
+          };
+          for (const k of ["GEMINI_API_KEY", "GROQ_API_KEY", "IO_API_KEY"]) {
+            if (process.env[k]) secrets[k] = process.env[k];
+          }
+          console.log(JSON.stringify(secrets));
+          ' | npx wrangler secret bulk

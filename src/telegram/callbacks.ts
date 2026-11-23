@@ -243,17 +243,30 @@ export async function handleCallbackQuery(
     const kind = parts[1];
     const idx = Number.parseInt(parts[2] ?? '', 10);
 
-    if (kind === 'model' && MODEL_PRESETS[idx]) {
-      const preset = MODEL_PRESETS[idx];
-      await setUserModel(env.DB, userId, preset.id);
-      await telegram.answerCallbackQuery(query.id, `Выбрана: ${preset.label}`);
-      await renderScreen(
-        telegram,
-        chatId,
-        messageId,
-        await buildSettingsScreen(env, userId),
-      );
-      return;
+    if (kind === 'model') {
+      if (parts[2] === 'auto') {
+        await setUserModel(env.DB, userId, null);
+        await telegram.answerCallbackQuery(query.id, 'Режим: Авто');
+        await renderScreen(
+          telegram,
+          chatId,
+          messageId,
+          await buildSettingsScreen(env, userId),
+        );
+        return;
+      }
+      if (MODEL_PRESETS[idx]) {
+        const preset = MODEL_PRESETS[idx];
+        await setUserModel(env.DB, userId, preset.id);
+        await telegram.answerCallbackQuery(query.id, `Выбрана: ${preset.label}`);
+        await renderScreen(
+          telegram,
+          chatId,
+          messageId,
+          await buildSettingsScreen(env, userId),
+        );
+        return;
+      }
     }
 
     if (kind === 'tz' && TIMEZONE_PRESETS[idx]) {

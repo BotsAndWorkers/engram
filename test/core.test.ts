@@ -4,6 +4,7 @@ import { buildSystemPrompt, hydrateHistory } from '../src/agent/runner';
 import { parseAllowedUserIds } from '../src/config/env';
 import { isQuietHour } from '../src/cron/reminders';
 import { buildSafeFtsQuery } from '../src/db/queries';
+import { FallbackLLMProvider } from '../src/llm/fallback';
 import { stripMarkdownForSpeech } from '../src/llm/tts';
 import {
   extractInlineToolCall,
@@ -314,5 +315,27 @@ describe('jarvis upgrades (quiet hours, tts, mini app)', () => {
     expect(html).toContain('/api/data');
     expect(await verifyTelegramInitData('', 'bot-token')).toBeNull();
     expect(await verifyTelegramInitData('user=%7B%22id%22%3A1%7D&hash=bad', 'bot-token')).toBeNull();
+  });
+
+  it('falls back to next LLM provider when primary fails', async () => {
+    const provider = new FallbackLLMProvider([
+      {
+        name: 'primary',
+        model: 'm1',
+        async chat() {
+          throw new Error('429 rate limit');
+        },
+      },
+      {
+        name: 'secondary',
+        model: 'm2',
+        async chat() {
+          return { content: 'fallback ok', toolCalls: [] };
+        },
+      },
+    ]);
+
+    const res = await provider.chat([{ role: 'user', content: 'hi' }], []);
+    expect(res.content).toBe('fallback ok');
   });
 });

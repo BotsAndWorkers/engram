@@ -18,12 +18,12 @@ export interface ScreenView {
 }
 
 export const MODEL_PRESETS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', label: 'Llama 3.3 70B' },
-  { id: '@cf/deepseek-ai/deepseek-v4.1-flash-1017', label: 'DeepSeek V4.1' },
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   { id: '@cf/google/gemma-4-26b-a4b-it', label: 'Gemma 4 26B' },
+  { id: '@cf/deepseek-ai/deepseek-v4.1-flash-1017', label: 'DeepSeek V4.1' },
   { id: '@cf/qwen/qwen3.8-27b', label: 'Qwen 3.8 27B' },
   { id: '@cf/meta/llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout' },
-  { id: '@cf/zai-org/glm-4.7-flash', label: 'GLM 4.7 Flash' },
+  { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', label: 'Llama 3.3 70B' },
 ];
 
 export const TIMEZONE_PRESETS: ReadonlyArray<{ id: string; label: string }> = [
@@ -87,8 +87,9 @@ export async function buildHomeScreen(
 
   const model =
     settings?.model_override ||
-    env.WORKERS_AI_MODEL ||
-    '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    (env.GEMINI_API_KEY
+      ? 'gemini-2.5-flash (Авто)'
+      : env.WORKERS_AI_MODEL || '@cf/google/gemma-4-26b-a4b-it');
   const timezone = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
   const modelLabel = MODEL_PRESETS.find((m) => m.id === model)?.label ?? model;
 
@@ -397,8 +398,9 @@ export async function buildSettingsScreen(
   const settings = await getUserSettings(env.DB, userId);
   const currentModel =
     settings?.model_override ||
-    env.WORKERS_AI_MODEL ||
-    '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    (env.GEMINI_API_KEY || env.GROQ_API_KEY || env.IO_API_KEY
+      ? 'auto'
+      : env.WORKERS_AI_MODEL || '@cf/google/gemma-4-26b-a4b-it');
   const currentTz = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
   const currentBriefing = settings?.briefing_hour ?? null;
   const currentCheckin = settings?.checkin_hour ?? null;
@@ -406,7 +408,17 @@ export async function buildSettingsScreen(
   const currentQuietEnd = settings?.quiet_end ?? null;
   const currentVoiceMode = settings?.voice_mode ?? 'off';
 
-  const modelButtons: InlineKeyboardButton[][] = [];
+  const modelButtons: InlineKeyboardButton[][] = [
+    [
+      {
+        text:
+          currentModel === 'auto'
+            ? '[*] Авто (Gemini -> Groq -> io.net)'
+            : 'Авто (Gemini -> Groq -> io.net)',
+        callback_data: 'set:model:auto',
+      },
+    ],
+  ];
   for (let i = 0; i < MODEL_PRESETS.length; i += 2) {
     const row: InlineKeyboardButton[] = [];
     for (let j = i; j < i + 2 && j < MODEL_PRESETS.length; j += 1) {
