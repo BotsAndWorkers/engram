@@ -5,15 +5,33 @@ import {
   getListItems,
   getUserSettings,
   getUsersForBriefing,
+  getUsersForCheckin,
   listRecentNotes,
   listReminders,
   markBriefingSent,
+  markCheckinSent,
   markReminderDispatched,
 } from '../db/queries';
 import { TelegramClient } from '../telegram/client';
 import { formatLocalTime } from '../tools/reminders';
 
 const TWO_DAYS_MS = 48 * 60 * 60 * 1000;
+
+export function isQuietHour(
+  hour: number,
+  quietStart: number | null,
+  quietEnd: number | null,
+): boolean {
+  if (quietStart === null || quietEnd === null) return false;
+  if (quietStart === quietEnd) return false;
+  const h = ((hour % 24) + 24) % 24;
+  const start = ((quietStart % 24) + 24) % 24;
+  const end = ((quietEnd % 24) + 24) % 24;
+  if (start < end) {
+    return h >= start && h < end;
+  }
+  return h >= start || h < end;
+}
 
 function getLocalDateAndHour(
   nowMs: number,
@@ -86,10 +104,11 @@ export async function processDueReminders(env: AppEnv): Promise<void> {
     }
   }
 
-  // Check daily briefings in the first 5 minutes of each hour
+  // Check daily briefings and evening check-ins in the first 5 minutes of each hour
   const utcMinutes = new Date(nowMs).getUTCMinutes();
   if (utcMinutes < 5) {
     await processDailyBriefings(env, telegram, nowMs);
+    await processEveningCheckins(env, telegram, nowMs);
   }
 
   // Hourly cleanup of old webhook deduplication records
@@ -110,6 +129,9 @@ async function processDailyBriefings(
     const { dateStr, hour } = getLocalDateAndHour(nowMs, timezone);
 
     if (hour !== user.briefing_hour || user.last_briefing_date === dateStr) {
+      continue;
+    }
+    if (isQuietHour(hour, user.quiet_start, user.quiet_end)) {
       continue;
     }
 
@@ -157,6 +179,69 @@ async function processDailyBriefings(
       await markBriefingSent(env.DB, user.user_id, dateStr);
     } catch (err) {
       console.error('Daily briefing failed', {
+        userId: user.user_id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+export async function processEveningCheckins(
+  env: AppEnv,
+  telegram: TelegramClient,
+  nowMs: number,
+): Promise<void> {
+  const users = await getUsersForCheckin(env.DB);
+  for (const user of users) {
+    if (user.checkin_hour === null || !user.chat_id) continue;
+    const timezone = user.timezone || env.DEFAULT_TIMEZONE || 'UTC';
+    const { dateStr, hour } = getLocalDateAndHour(nowMs, timezone);
+
+    if (hour !== user.checkin_hour || user.last_checkin_date === dateStr) {
+      continue;
+    }
+    if (isQuietHour(hour, user.quiet_start, user.quiet_end)) {
+      continue;
+    }
+
+    try {
+      const [reminders, listItems] = await Promise.all([
+        listReminders(env.DB, user.user_id, 'pending', 5),
+        getListItems(env.DB, user.user_id),
+      ]);
+
+      const openItems = listItems.filter((i) => !i.done);
+      const lines: string[] = [
+        `<b>Вечерний чек-ин (${dateStr})</b>`,
+        '',
+        'Как прошёл день? Можешь коротко подвести итоги, отметить что удалось сделать или записать мысли на завтра.',
+      ];
+
+      if (reminders.length > 0 || openItems.length > 0) {
+        lines.push('');
+        if (reminders.length > 0) {
+          lines.push(`<b>Осталось напоминаний:</b> ${reminders.length}`);
+        }
+        if (openItems.length > 0) {
+          lines.push(`<b>Открытых пунктов в списках:</b> ${openItems.length}`);
+        }
+      }
+
+      await telegram.sendMessage(user.chat_id, lines.join('\n'), {
+        parseMode: 'HTML',
+        replyMarkup: {
+          inline_keyboard: [
+            [
+              { text: 'Напоминания', callback_data: 'menu:rems:pending' },
+              { text: 'Списки', callback_data: 'menu:lists:' },
+            ],
+            [{ text: 'Главное меню', callback_data: 'menu:home' }],
+          ],
+        },
+      });
+      await markCheckinSent(env.DB, user.user_id, dateStr);
+    } catch (err) {
+      console.error('Evening checkin failed', {
         userId: user.user_id,
         error: err instanceof Error ? err.message : String(err),
       });

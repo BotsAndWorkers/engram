@@ -45,7 +45,33 @@ export interface UserSettingsRow {
   briefing_hour: number | null;
   last_briefing_date: string | null;
   chat_id: number | null;
+  quiet_start: number | null;
+  quiet_end: number | null;
+  checkin_hour: number | null;
+  last_checkin_date: string | null;
+  voice_mode: 'off' | 'voice' | 'always' | null;
   updated_at: number;
+}
+
+export interface DocumentRow {
+  id: number;
+  user_id: number;
+  file_name: string;
+  mime_type: string;
+  telegram_file_id: string;
+  content: string;
+  created_at: number;
+}
+
+export interface TrackerEntryRow {
+  id: number;
+  user_id: number;
+  category: string;
+  label: string;
+  amount: number | null;
+  unit: string | null;
+  note: string | null;
+  created_at: number;
 }
 
 export interface ListItemRow {

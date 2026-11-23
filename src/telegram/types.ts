@@ -33,6 +33,13 @@ export interface TelegramPhotoSize {
   file_size?: number;
 }
 
+export interface TelegramDocument {
+  file_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
 export interface TelegramMessage {
   message_id: number;
   from?: TelegramUser;
@@ -42,6 +49,7 @@ export interface TelegramMessage {
   caption?: string;
   voice?: TelegramVoice;
   photo?: TelegramPhotoSize[];
+  document?: TelegramDocument;
   forward_origin?: TelegramForwardOrigin;
 }
 
@@ -60,7 +68,8 @@ export interface TelegramUpdate {
 
 export interface InlineKeyboardButton {
   text: string;
-  callback_data: string;
+  callback_data?: string;
+  web_app?: { url: string };
 }
 
 export interface InlineKeyboardMarkup {

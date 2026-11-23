@@ -191,6 +191,24 @@ export class TelegramClient {
     return res.arrayBuffer();
   }
 
+  private async postForm(method: string, form: FormData): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/${method}`, {
+      method: 'POST',
+      body: form,
+    });
+
+    const json = (await res.json()) as {
+      ok: boolean;
+      description?: string;
+    };
+
+    if (!res.ok || !json.ok) {
+      throw new Error(
+        `Telegram API ${method} failed (${res.status}): ${json.description ?? 'unknown error'}`,
+      );
+    }
+  }
+
   async sendDocument(
     chatId: number,
     filename: string,
@@ -208,20 +226,37 @@ export class TelegramClient {
       form.append('caption', caption);
     }
 
-    const res = await fetch(`${this.baseUrl}/sendDocument`, {
-      method: 'POST',
-      body: form,
+    await this.postForm('sendDocument', form);
+  }
+
+  async sendDocumentById(
+    chatId: number,
+    fileId: string,
+    caption?: string,
+  ): Promise<void> {
+    await this.call('sendDocument', {
+      chat_id: chatId,
+      document: fileId,
+      ...(caption ? { caption } : {}),
     });
+  }
 
-    const json = (await res.json()) as {
-      ok: boolean;
-      description?: string;
-    };
-
-    if (!res.ok || !json.ok) {
-      throw new Error(
-        `Telegram API sendDocument failed (${res.status}): ${json.description ?? 'unknown error'}`,
-      );
+  async sendVoice(
+    chatId: number,
+    audioBytes: Uint8Array,
+    caption?: string,
+  ): Promise<void> {
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append(
+      'voice',
+      new Blob([audioBytes], { type: 'audio/mpeg' }),
+      'reply.mp3',
+    );
+    if (caption) {
+      form.append('caption', caption);
     }
+
+    await this.postForm('sendVoice', form);
   }
 }

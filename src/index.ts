@@ -2,7 +2,11 @@ import { Hono } from 'hono';
 import { runAgentTurn } from './agent/runner';
 import type { AppEnv } from './config/env';
 import { processDueReminders } from './cron/reminders';
-import { touchUserChatId, tryMarkUpdateProcessed } from './db/queries';
+import {
+  saveDocument,
+  touchUserChatId,
+  tryMarkUpdateProcessed,
+} from './db/queries';
 import {
   describeImageWithWorkersAI,
   transcribeAudioWithWorkersAI,
@@ -12,6 +16,7 @@ import { handleCallbackQuery } from './telegram/callbacks';
 import { TelegramClient } from './telegram/client';
 import { handleSlashCommand } from './telegram/commands';
 import type { TelegramForwardOrigin, TelegramUpdate } from './telegram/types';
+import { webAppRoutes } from './webapp/api';
 
 function formatForwardPrefix(origin: TelegramForwardOrigin | undefined): string {
   if (!origin) return '';
@@ -35,6 +40,8 @@ function formatForwardPrefix(origin: TelegramForwardOrigin | undefined): string 
 }
 
 const app = new Hono<{ Bindings: AppEnv }>();
+
+app.route('/app', webAppRoutes);
 
 app.get('/health', (c) => {
   return c.json({ ok: true, service: 'engram' });
@@ -76,6 +83,41 @@ app.post('/webhook', async (c) => {
   return c.json({ ok: true });
 });
 
+async function extractDocumentText(
+  ai: Ai,
+  fileName: string,
+  mimeType: string,
+  bytes: ArrayBuffer,
+): Promise<string> {
+  const lower = fileName.toLowerCase();
+  const isTextLike =
+    mimeType.startsWith('text/') ||
+    /\.(txt|md|csv|json|ts|tsx|js|jsx|py|sql|ya?ml|xml|html|log|env|ini|conf)$/i.test(
+      lower,
+    );
+
+  if (isTextLike) {
+    return new TextDecoder().decode(bytes).slice(0, 50_000);
+  }
+
+  if (mimeType === 'application/pdf' || lower.endsWith('.pdf')) {
+    const converted = await ai.toMarkdown([
+      {
+        name: fileName,
+        blob: new Blob([bytes], { type: 'application/pdf' }),
+      },
+    ]);
+    const doc = Array.isArray(converted) ? converted[0] : converted;
+    if (doc && 'data' in doc && typeof doc.data === 'string' && doc.data.trim()) {
+      return doc.data.slice(0, 50_000);
+    }
+  }
+
+  throw new Error(
+    `Формат файла "${fileName}" (${mimeType}) пока не поддерживается для чтения.`,
+  );
+}
+
 async function handleUpdate(
   env: AppEnv,
   update: TelegramUpdate,
@@ -100,6 +142,51 @@ async function handleUpdate(
   try {
     await touchUserChatId(env.DB, userId, chatId);
     let userText = (msg.text ?? msg.caption ?? '').trim();
+    let isVoiceInput = false;
+
+    if (msg.document) {
+      await telegram.sendChatAction(chatId, 'typing');
+      const fileName = msg.document.file_name || 'document';
+      const mimeType = msg.document.mime_type || 'application/octet-stream';
+
+      if (msg.document.file_size && msg.document.file_size > 10 * 1024 * 1024) {
+        await telegram.sendMessage(
+          chatId,
+          `Файл "${fileName}" слишком большой (максимум 10 МБ).`,
+        );
+        return;
+      }
+
+      try {
+        const docBytes = await telegram.getFileBytes(msg.document.file_id);
+        const extracted = await extractDocumentText(
+          env.AI,
+          fileName,
+          mimeType,
+          docBytes,
+        );
+        const saved = await saveDocument(env.DB, {
+          userId,
+          fileName,
+          mimeType,
+          telegramFileId: msg.document.file_id,
+          content: extracted,
+        });
+
+        const preview = extracted.slice(0, 6000);
+        userText = userText
+          ? `${userText}\n\n[Прикреплен и сохранен документ #${saved.id} "${fileName}"]:\n${preview}`
+          : `[Пользователь прислал и сохранил документ #${saved.id} "${fileName}" (${extracted.length} симв.)]:\n${preview}`;
+      } catch (docErr) {
+        const reason =
+          docErr instanceof Error ? docErr.message : 'неизвестная ошибка';
+        await telegram.sendMessage(
+          chatId,
+          `Не удалось обработать документ "${fileName}": ${reason}`,
+        );
+        return;
+      }
+    }
 
     if (msg.photo && msg.photo.length > 0) {
       await telegram.sendChatAction(chatId, 'typing');
@@ -155,6 +242,7 @@ async function handleUpdate(
         return;
       }
       userText = `[Голосовое сообщение]: ${transcript}`;
+      isVoiceInput = true;
     }
 
     if (!userText) return;
@@ -179,6 +267,7 @@ async function handleUpdate(
       userId,
       chatId,
       userText,
+      isVoiceInput,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

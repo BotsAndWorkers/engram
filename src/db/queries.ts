@@ -1,11 +1,13 @@
 import type {
   ChatSummaryRow,
   ConversationEpisodeRow,
+  DocumentRow,
   ListItemRow,
   MemoryRow,
   MessageRow,
   NoteRow,
   ReminderRow,
+  TrackerEntryRow,
   UserSettingsRow,
 } from './types';
 
@@ -892,4 +894,280 @@ export async function markBriefingSent(
     .prepare('UPDATE user_settings SET last_briefing_date = ? WHERE user_id = ?')
     .bind(dateStr, userId)
     .run();
+}
+
+export async function setUserQuietHours(
+  db: D1Database,
+  userId: number,
+  quietStart: number | null,
+  quietEnd: number | null,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, quiet_start, quiet_end, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET
+         quiet_start = excluded.quiet_start,
+         quiet_end = excluded.quiet_end,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, quietStart, quietEnd, Date.now())
+    .run();
+}
+
+export async function setUserCheckinHour(
+  db: D1Database,
+  userId: number,
+  chatId: number,
+  hour: number | null,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, chat_id, checkin_hour, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET
+         chat_id = excluded.chat_id,
+         checkin_hour = excluded.checkin_hour,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, chatId, hour, Date.now())
+    .run();
+}
+
+export async function getUsersForCheckin(
+  db: D1Database,
+): Promise<UserSettingsRow[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT * FROM user_settings WHERE checkin_hour IS NOT NULL AND chat_id IS NOT NULL',
+    )
+    .all<UserSettingsRow>();
+  return results;
+}
+
+export async function markCheckinSent(
+  db: D1Database,
+  userId: number,
+  dateStr: string,
+): Promise<void> {
+  await db
+    .prepare('UPDATE user_settings SET last_checkin_date = ? WHERE user_id = ?')
+    .bind(dateStr, userId)
+    .run();
+}
+
+export async function setUserVoiceMode(
+  db: D1Database,
+  userId: number,
+  voiceMode: 'off' | 'voice' | 'always',
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (user_id, voice_mode, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET
+         voice_mode = excluded.voice_mode,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(userId, voiceMode, Date.now())
+    .run();
+}
+
+/* ---------------- Documents ---------------- */
+
+export async function saveDocument(
+  db: D1Database,
+  params: {
+    userId: number;
+    fileName: string;
+    mimeType: string;
+    telegramFileId: string;
+    content: string;
+  },
+): Promise<DocumentRow> {
+  const result = await db
+    .prepare(
+      'INSERT INTO documents (user_id, file_name, mime_type, telegram_file_id, content, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING *',
+    )
+    .bind(
+      params.userId,
+      params.fileName.trim(),
+      params.mimeType,
+      params.telegramFileId,
+      params.content.trim(),
+      Date.now(),
+    )
+    .first<DocumentRow>();
+
+  if (!result) throw new Error('Failed to save document');
+  return result;
+}
+
+export async function getDocumentById(
+  db: D1Database,
+  userId: number,
+  docId: number,
+): Promise<DocumentRow | null> {
+  return db
+    .prepare('SELECT * FROM documents WHERE id = ? AND user_id = ?')
+    .bind(docId, userId)
+    .first<DocumentRow>();
+}
+
+export async function listRecentDocuments(
+  db: D1Database,
+  userId: number,
+  limit = 10,
+): Promise<DocumentRow[]> {
+  const { results } = await db
+    .prepare(
+      'SELECT * FROM documents WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+    )
+    .bind(userId, limit)
+    .all<DocumentRow>();
+  return results;
+}
+
+export async function searchDocuments(
+  db: D1Database,
+  userId: number,
+  query: string,
+  limit = 8,
+): Promise<DocumentRow[]> {
+  const ftsQuery = buildSafeFtsQuery(query);
+  if (ftsQuery) {
+    try {
+      const { results } = await db
+        .prepare(
+          `SELECT d.* FROM documents d
+           JOIN documents_fts fts ON d.id = fts.rowid
+           WHERE d.user_id = ? AND documents_fts MATCH ?
+           ORDER BY bm25(documents_fts) LIMIT ?`,
+        )
+        .bind(userId, ftsQuery, limit)
+        .all<DocumentRow>();
+      if (results.length > 0) return results;
+    } catch {
+      // fallback to LIKE
+    }
+  }
+
+  const pattern = `%${query.trim().toLowerCase()}%`;
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM documents
+       WHERE user_id = ? AND (LOWER(file_name) LIKE ? OR LOWER(content) LIKE ?)
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .bind(userId, pattern, pattern, limit)
+    .all<DocumentRow>();
+  return results;
+}
+
+export async function deleteDocument(
+  db: D1Database,
+  userId: number,
+  docId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM documents WHERE id = ? AND user_id = ?')
+    .bind(docId, userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/* ---------------- Personal Trackers ---------------- */
+
+export async function addTrackerEntry(
+  db: D1Database,
+  params: {
+    userId: number;
+    category: string;
+    label: string;
+    amount?: number | null;
+    unit?: string | null;
+    note?: string | null;
+  },
+): Promise<TrackerEntryRow> {
+  const result = await db
+    .prepare(
+      'INSERT INTO tracker_entries (user_id, category, label, amount, unit, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *',
+    )
+    .bind(
+      params.userId,
+      params.category.trim().toLowerCase(),
+      params.label.trim(),
+      params.amount ?? null,
+      params.unit?.trim() || null,
+      params.note?.trim() || null,
+      Date.now(),
+    )
+    .first<TrackerEntryRow>();
+
+  if (!result) throw new Error('Failed to insert tracker entry');
+  return result;
+}
+
+export async function getTrackerEntries(
+  db: D1Database,
+  userId: number,
+  category?: string,
+  days = 30,
+  limit = 30,
+): Promise<TrackerEntryRow[]> {
+  const since = Date.now() - days * 86_400_000;
+  if (category) {
+    const { results } = await db
+      .prepare(
+        `SELECT * FROM tracker_entries
+         WHERE user_id = ? AND category = ? AND created_at >= ?
+         ORDER BY created_at DESC LIMIT ?`,
+      )
+      .bind(userId, category.trim().toLowerCase(), since, limit)
+      .all<TrackerEntryRow>();
+    return results;
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM tracker_entries
+       WHERE user_id = ? AND created_at >= ?
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .bind(userId, since, limit)
+    .all<TrackerEntryRow>();
+  return results;
+}
+
+export async function getTrackerSummary(
+  db: D1Database,
+  userId: number,
+  days = 30,
+): Promise<
+  Array<{ category: string; unit: string | null; count: number; total: number }>
+> {
+  const since = Date.now() - days * 86_400_000;
+  const { results } = await db
+    .prepare(
+      `SELECT category, unit, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+       FROM tracker_entries
+       WHERE user_id = ? AND created_at >= ?
+       GROUP BY category, unit
+       ORDER BY count DESC`,
+    )
+    .bind(userId, since)
+    .all<{ category: string; unit: string | null; count: number; total: number }>();
+  return results;
+}
+
+export async function deleteTrackerEntry(
+  db: D1Database,
+  userId: number,
+  entryId: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM tracker_entries WHERE id = ? AND user_id = ?')
+    .bind(entryId, userId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
 }

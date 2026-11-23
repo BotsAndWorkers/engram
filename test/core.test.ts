@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { parseCompactionJson } from '../src/agent/compaction';
 import { buildSystemPrompt, hydrateHistory } from '../src/agent/runner';
 import { parseAllowedUserIds } from '../src/config/env';
+import { isQuietHour } from '../src/cron/reminders';
 import { buildSafeFtsQuery } from '../src/db/queries';
+import { stripMarkdownForSpeech } from '../src/llm/tts';
 import {
   extractInlineToolCall,
   normalizeWorkersAIResponse,
@@ -21,6 +23,8 @@ import {
   isPublicHttpUrl,
   parseDuckDuckGoHtml,
 } from '../src/tools/web';
+import { verifyTelegramInitData } from '../src/webapp/api';
+import { renderMiniAppHtml } from '../src/webapp/app';
 
 describe('buildSafeFtsQuery', () => {
   it('escapes special characters into prefix tokens', () => {
@@ -283,5 +287,32 @@ describe('web_search DuckDuckGo parser', () => {
         snippet: 'Serverless edge runtime & AI.',
       },
     ]);
+  });
+});
+
+describe('jarvis upgrades (quiet hours, tts, mini app)', () => {
+  it('evaluates quiet hours across midnight and daytime ranges', () => {
+    expect(isQuietHour(23, 23, 8)).toBe(true);
+    expect(isQuietHour(3, 23, 8)).toBe(true);
+    expect(isQuietHour(8, 23, 8)).toBe(false);
+    expect(isQuietHour(14, 23, 8)).toBe(false);
+    expect(isQuietHour(12, 9, 18)).toBe(true);
+    expect(isQuietHour(19, 9, 18)).toBe(false);
+    expect(isQuietHour(12, null, null)).toBe(false);
+  });
+
+  it('strips markdown syntax cleanly for TTS speech', () => {
+    const clean = stripMarkdownForSpeech(
+      '# Заголовок\n**Привет**, вот [ссылка](https://example.com) и `код`!',
+    );
+    expect(clean).toBe('Заголовок Привет, вот ссылка и код!');
+  });
+
+  it('renders Mini App HTML and rejects invalid initData', async () => {
+    const html = renderMiniAppHtml();
+    expect(html).toContain('telegram-web-app.js');
+    expect(html).toContain('/api/data');
+    expect(await verifyTelegramInitData('', 'bot-token')).toBeNull();
+    expect(await verifyTelegramInitData('user=%7B%22id%22%3A1%7D&hash=bad', 'bot-token')).toBeNull();
   });
 });

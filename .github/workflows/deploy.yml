@@ -68,10 +68,12 @@ jobs:
               body: JSON.stringify({
                 commands: [
                   { command: "menu", description: "Главное меню" },
+                  { command: "app", description: "Открыть Mini App" },
                   { command: "notes", description: "Заметки и поиск" },
                   { command: "reminders", description: "Напоминания" },
                   { command: "lists", description: "Списки и чеклисты" },
                   { command: "memory", description: "Долгосрочная память" },
+                  { command: "voice", description: "Голосовые ответы" },
                   { command: "export", description: "Экспорт заметок (.md)" },
                   { command: "model", description: "Выбор модели AI" },
                   { command: "tz", description: "Часовой пояс" },

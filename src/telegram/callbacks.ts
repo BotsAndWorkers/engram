@@ -8,8 +8,11 @@ import {
   deleteReminder,
   getUserSettings,
   setUserBriefingHour,
+  setUserCheckinHour,
   setUserModel,
+  setUserQuietHours,
   setUserTimezone,
+  setUserVoiceMode,
   snoozeReminder,
   toggleListItem,
 } from '../db/queries';
@@ -28,9 +31,12 @@ import {
   buildNotesScreen,
   buildRemindersScreen,
   buildSettingsScreen,
+  CHECKIN_PRESETS,
   MODEL_PRESETS,
+  QUIET_PRESETS,
   type ScreenView,
   TIMEZONE_PRESETS,
+  VOICE_MODES,
 } from './ui';
 
 async function renderScreen(
@@ -272,6 +278,55 @@ export async function handleCallbackQuery(
           ? 'Дайджест выключен'
           : `Дайджест в ${preset.label}`,
       );
+      await renderScreen(
+        telegram,
+        chatId,
+        messageId,
+        await buildSettingsScreen(env, userId),
+      );
+      return;
+    }
+
+    if (kind === 'checkin' && CHECKIN_PRESETS[idx] && chatId) {
+      const preset = CHECKIN_PRESETS[idx];
+      await setUserCheckinHour(env.DB, userId, chatId, preset.hour);
+      await telegram.answerCallbackQuery(
+        query.id,
+        preset.hour === null
+          ? 'Чек-ин выключен'
+          : `Чек-ин в ${preset.label}`,
+      );
+      await renderScreen(
+        telegram,
+        chatId,
+        messageId,
+        await buildSettingsScreen(env, userId),
+      );
+      return;
+    }
+
+    if (kind === 'quiet' && QUIET_PRESETS[idx]) {
+      const preset = QUIET_PRESETS[idx];
+      await setUserQuietHours(env.DB, userId, preset.start, preset.end);
+      await telegram.answerCallbackQuery(
+        query.id,
+        preset.start === null
+          ? 'Тихие часы выключены'
+          : `Тихие часы: ${preset.label}`,
+      );
+      await renderScreen(
+        telegram,
+        chatId,
+        messageId,
+        await buildSettingsScreen(env, userId),
+      );
+      return;
+    }
+
+    if (kind === 'voice' && VOICE_MODES[idx]) {
+      const preset = VOICE_MODES[idx];
+      await setUserVoiceMode(env.DB, userId, preset.id);
+      await telegram.answerCallbackQuery(query.id, preset.label);
       await renderScreen(
         telegram,
         chatId,

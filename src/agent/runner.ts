@@ -8,6 +8,7 @@ import {
 } from '../db/queries';
 import type { MemoryRow, MessageRow } from '../db/types';
 import { createLLMProvider } from '../llm/factory';
+import { stripMarkdownForSpeech, synthesizeSpeech } from '../llm/tts';
 import type { ChatMessage, ToolCall } from '../llm/types';
 import type { TelegramClient } from '../telegram/client';
 import { markdownToTelegramHtml } from '../telegram/format';
@@ -34,6 +35,14 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   get_list: 'Проверяю списки...',
   toggle_list_item: 'Обновляю список...',
   remove_list_item: 'Обновляю список...',
+  search_documents: 'Ищу в документах...',
+  get_document: 'Открываю документ...',
+  list_documents: 'Проверяю документы...',
+  delete_document: 'Удаляю документ...',
+  log_tracker_entry: 'Записываю в трекер...',
+  get_tracker_summary: 'Считаю сводку трекера...',
+  list_tracker_entries: 'Проверяю записи трекера...',
+  delete_tracker_entry: 'Удаляю запись трекера...',
   search_past_conversations: 'Ищу в архиве диалогов...',
   fetch_url: 'Читаю страницу по ссылке...',
   web_search: 'Ищу в интернете...',
@@ -99,10 +108,12 @@ export function buildSystemPrompt(
     '',
     '<capabilities>',
     '- Notes & Knowledge Base: save, edit, delete, and search notes (keyword + semantic search), plus Markdown export via /export or /menu.',
-    '- Reminders & Daily Briefing: one-time and recurring reminders, plus an optional daily summary at a chosen hour in /menu -> Настройки.',
-    '- Interactive Checklists: manage named lists (shopping, movies, todos) with clickable checkboxes via chat or /lists.',
+    '- Reminders, Briefing & Check-in: one-time and recurring reminders, optional morning briefing, evening check-in, and quiet hours in /menu -> Настройки.',
+    '- Interactive Checklists & Trackers: manage lists (/lists) and track expenses, habits, workouts, or time automatically from chat.',
+    '- Documents & Files: index and search uploaded PDF, TXT, MD, CSV, JSON, and code files.',
     '- Memory & Archive: silently remember personal facts and search past conversation summaries.',
-    '- Multimodal & Web: understand voice messages, photos/screenshots, forwarded posts/messages, search the web, and read web links.',
+    '- Multimodal & Web: understand voice messages (and reply by voice via /voice), photos/screenshots, forwarded posts, search the web, and read URLs.',
+    '- Mini App: visual dashboard inside Telegram via /app or /menu.',
     '</capabilities>',
     '',
     '<long_term_memory>',
@@ -115,6 +126,8 @@ export function buildSystemPrompt(
     '  * Personal facts (preferences, projects, habits, names, roles, goals) -> silently call remember_fact.',
     '  * Ideas, links, summaries, code, or reference info -> save with save_note.',
     '  * Shopping items, movies, books, or quick todo items -> use add_to_list / get_list / toggle_list_item.',
+    '  * Expenses, habits, workouts, or numeric logs (e.g. "потратил 1200 на такси", "пробежал 5 км") -> use log_tracker_entry.',
+    '  * Uploaded files or documents -> search with search_documents / get_document.',
     '- Casual remarks or slang (e.g. "по факту", "жиза", "ок") are normal conversation, not a request to save data.',
     '- Never invent missing tool parameters; ask a brief clarifying question or search first.',
     '- When asked about saved notes or older conversations, call search_notes or search_past_conversations instead of guessing.',
@@ -187,8 +200,9 @@ export async function runAgentTurn(params: {
   userId: number;
   chatId: number;
   userText: string;
+  isVoiceInput?: boolean;
 }): Promise<void> {
-  const { env, telegram, userId, chatId, userText } = params;
+  const { env, telegram, userId, chatId, userText, isVoiceInput } = params;
 
   await telegram.sendChatAction(chatId, 'typing');
 
@@ -410,6 +424,19 @@ export async function runAgentTurn(params: {
     );
   } else {
     await telegram.sendMessage(chatId, formattedFinal, replyOptions);
+  }
+
+  const voiceMode = settings?.voice_mode || 'off';
+  const shouldSpeak =
+    voiceMode === 'always' || (voiceMode === 'voice' && Boolean(isVoiceInput));
+  if (shouldSpeak && finalText) {
+    const speechText = stripMarkdownForSpeech(finalText);
+    if (speechText) {
+      const audio = await synthesizeSpeech(speechText, 'ru').catch(() => null);
+      if (audio) {
+        await telegram.sendVoice(chatId, audio).catch(() => undefined);
+      }
+    }
   }
 
   // Run background compaction after the reply is already delivered

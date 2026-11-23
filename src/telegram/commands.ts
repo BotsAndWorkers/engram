@@ -4,6 +4,7 @@ import {
   searchNotes,
   setUserModel,
   setUserTimezone,
+  setUserVoiceMode,
 } from '../db/queries';
 import type { TelegramClient } from './client';
 import {
@@ -219,6 +220,52 @@ export async function handleSlashCommand(ctx: CommandContext): Promise<boolean> 
       await ctx.telegram.sendMessage(
         ctx.chatId,
         `Часовой пояс обновлен: ${arg}`,
+      );
+      return true;
+    }
+
+    case '/voice': {
+      if (!arg) {
+        const screen = await buildSettingsScreen(ctx.env, ctx.userId);
+        await ctx.telegram.sendMessage(ctx.chatId, screen.text, {
+          replyMarkup: screen.replyMarkup,
+        });
+        return true;
+      }
+
+      const mode = arg.toLowerCase();
+      if (mode !== 'off' && mode !== 'voice' && mode !== 'always') {
+        await ctx.telegram.sendMessage(
+          ctx.chatId,
+          `Некорректный режим "${arg}". Доступные значения: off, voice, always.`,
+        );
+        return true;
+      }
+
+      await setUserVoiceMode(ctx.env.DB, ctx.userId, mode);
+      await ctx.telegram.sendMessage(
+        ctx.chatId,
+        `Режим голосовых ответов обновлен: ${mode}`,
+      );
+      return true;
+    }
+
+    case '/app': {
+      await ctx.telegram.sendMessage(
+        ctx.chatId,
+        'Открой Mini App для удобной работы с заметками, списками, напоминаниями и трекерами:',
+        {
+          replyMarkup: {
+            inline_keyboard: [
+              [
+                {
+                  text: 'Открыть Mini App',
+                  web_app: { url: 'https://engram.liam3301j.workers.dev/app' },
+                },
+              ],
+            ],
+          },
+        },
       );
       return true;
     }

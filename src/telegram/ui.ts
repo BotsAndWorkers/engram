@@ -45,6 +45,35 @@ export const BRIEFING_PRESETS: ReadonlyArray<{
   { hour: 20, label: '20:00' },
 ];
 
+export const CHECKIN_PRESETS: ReadonlyArray<{
+  hour: number | null;
+  label: string;
+}> = [
+  { hour: null, label: 'Выкл' },
+  { hour: 20, label: '20:00' },
+  { hour: 21, label: '21:00' },
+  { hour: 22, label: '22:00' },
+];
+
+export const QUIET_PRESETS: ReadonlyArray<{
+  start: number | null;
+  end: number | null;
+  label: string;
+}> = [
+  { start: null, end: null, label: 'Выкл' },
+  { start: 23, end: 8, label: '23:00-08:00' },
+  { start: 0, end: 9, label: '00:00-09:00' },
+];
+
+export const VOICE_MODES: ReadonlyArray<{
+  id: 'off' | 'voice' | 'always';
+  label: string;
+}> = [
+  { id: 'off', label: 'Голос: выкл' },
+  { id: 'voice', label: 'Голос: на ГС' },
+  { id: 'always', label: 'Голос: всегда' },
+];
+
 const NOTES_PAGE_SIZE = 5;
 
 export async function buildHomeScreen(
@@ -93,6 +122,12 @@ export async function buildHomeScreen(
       [
         { text: 'Справка', callback_data: 'menu:help' },
         { text: 'Очистить чат', callback_data: 'menu:clear_ask' },
+      ],
+      [
+        {
+          text: 'Mini App',
+          web_app: { url: 'https://engram.liam3301j.workers.dev/app' },
+        },
       ],
     ],
   };
@@ -366,6 +401,10 @@ export async function buildSettingsScreen(
     '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   const currentTz = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
   const currentBriefing = settings?.briefing_hour ?? null;
+  const currentCheckin = settings?.checkin_hour ?? null;
+  const currentQuietStart = settings?.quiet_start ?? null;
+  const currentQuietEnd = settings?.quiet_end ?? null;
+  const currentVoiceMode = settings?.voice_mode ?? 'off';
 
   const modelButtons: InlineKeyboardButton[][] = [];
   for (let i = 0; i < MODEL_PRESETS.length; i += 2) {
@@ -400,10 +439,38 @@ export async function buildSettingsScreen(
     callback_data: `set:brief:${idx}`,
   }));
 
+  const checkinRow: InlineKeyboardButton[] = CHECKIN_PRESETS.map((c, idx) => ({
+    text: c.hour === currentCheckin ? `[*] ${c.label}` : c.label,
+    callback_data: `set:checkin:${idx}`,
+  }));
+
+  const quietRow: InlineKeyboardButton[] = QUIET_PRESETS.map((q, idx) => ({
+    text:
+      q.start === currentQuietStart && q.end === currentQuietEnd
+        ? `[*] ${q.label}`
+        : q.label,
+    callback_data: `set:quiet:${idx}`,
+  }));
+
+  const voiceRow: InlineKeyboardButton[] = VOICE_MODES.map((v, idx) => ({
+    text: v.id === currentVoiceMode ? `[*] ${v.label}` : v.label,
+    callback_data: `set:voice:${idx}`,
+  }));
+
   const briefLabel =
     currentBriefing === null
       ? 'выключен'
       : `${String(currentBriefing).padStart(2, '0')}:00`;
+  const checkinLabel =
+    currentCheckin === null
+      ? 'выключен'
+      : `${String(currentCheckin).padStart(2, '0')}:00`;
+  const quietLabel =
+    currentQuietStart === null || currentQuietEnd === null
+      ? 'выключены'
+      : `${String(currentQuietStart).padStart(2, '0')}:00-${String(currentQuietEnd).padStart(2, '0')}:00`;
+  const voiceLabel =
+    VOICE_MODES.find((v) => v.id === currentVoiceMode)?.label ?? currentVoiceMode;
 
   const text = [
     'Настройки',
@@ -411,8 +478,11 @@ export async function buildSettingsScreen(
     `Модель: ${currentModel}`,
     `Часовой пояс: ${currentTz}`,
     `Дайджест дня: ${briefLabel}`,
+    `Вечерний чек-ин: ${checkinLabel}`,
+    `Тихие часы: ${quietLabel}`,
+    `Голосовые ответы: ${voiceLabel}`,
     '',
-    'Выбери модель, часовой пояс или время ежедневной сводки:',
+    'Выбери модель, часовой пояс, время сводки/чек-ина, тихие часы или режим голоса:',
   ].join('\n');
 
   return {
@@ -422,6 +492,9 @@ export async function buildSettingsScreen(
         ...modelButtons,
         ...tzButtons,
         briefRow,
+        checkinRow,
+        quietRow,
+        voiceRow,
         [{ text: 'В главное меню', callback_data: 'menu:home' }],
       ],
     },
@@ -502,6 +575,7 @@ export function buildHelpScreen(): ScreenView {
       '',
       'Команды:',
       '/menu — главное интерактивное меню',
+      '/app — открыть Mini App',
       '/notes [запрос] — заметки или поиск',
       '/reminders — список напоминаний',
       '/lists — интерактивные списки',
@@ -509,6 +583,7 @@ export function buildHelpScreen(): ScreenView {
       '/export — экспорт всех заметок в Markdown',
       '/model [id | reset] — выбор модели AI',
       '/tz [Asia/Novosibirsk] — часовой пояс',
+      '/voice [off|voice|always] — режим голосовых ответов',
       '/clear — очистить историю диалога',
       '',
       'Примеры запросов:',
