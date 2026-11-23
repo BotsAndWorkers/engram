@@ -238,6 +238,90 @@ export async function probeAllProviders(
     }
   };
 
+  const groqCheck = async (): Promise<ProviderProbeResult> => {
+    if (!env.GROQ_API_KEY) {
+      return {
+        id: 'groq',
+        name: 'Groq',
+        configured: false,
+        ok: false,
+        latencyMs: null,
+        details: 'Ключ не добавлен в секреты',
+      };
+    }
+
+    const start = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const listRes = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: {
+          Authorization: `Bearer ${env.GROQ_API_KEY}`,
+          'User-Agent': 'engram-bot/1.0',
+        },
+        signal: controller.signal,
+      });
+      const latencyMs = Date.now() - start;
+      if (!listRes.ok) {
+        const errText = await listRes.text();
+        return {
+          id: 'groq',
+          name: 'Groq',
+          configured: true,
+          ok: false,
+          latencyMs,
+          details: `HTTP ${listRes.status}: ${errText.slice(0, 140)}`,
+        };
+      }
+      const listJson = (await listRes.json()) as {
+        data?: Array<{ id?: string }>;
+      };
+      const chatModels = (listJson.data || [])
+        .map((m) => m.id)
+        .filter(
+          (id): id is string =>
+            typeof id === 'string' &&
+            id.length > 0 &&
+            !id.includes('whisper') &&
+            !id.includes('guard'),
+        );
+
+      if (chatModels.length === 0) {
+        return {
+          id: 'groq',
+          name: 'Groq',
+          configured: true,
+          ok: false,
+          latencyMs,
+          details: 'В каталоге ключа нет доступных чат-моделей',
+        };
+      }
+
+      const probe = await probeOpenAIProvider({
+        id: 'groq',
+        name: 'Groq',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        apiKey: env.GROQ_API_KEY,
+        model: chatModels[0],
+      });
+      return {
+        ...probe,
+        details: `${probe.details} (всего в каталоге: ${chatModels.length}, напр.: ${chatModels.slice(0, 3).join(', ')})`,
+      };
+    } catch (err) {
+      return {
+        id: 'groq',
+        name: 'Groq',
+        configured: true,
+        ok: false,
+        latencyMs: Date.now() - start,
+        details: err instanceof Error ? err.message : 'Network error',
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   return Promise.all([
     probeOpenAIProvider({
       id: 'gemini',
@@ -246,13 +330,7 @@ export async function probeAllProviders(
       apiKey: env.GEMINI_API_KEY,
       model: 'gemini-3.5-flash-lite',
     }),
-    probeOpenAIProvider({
-      id: 'groq',
-      name: 'Groq',
-      baseUrl: 'https://api.groq.com/openai/v1',
-      apiKey: env.GROQ_API_KEY,
-      model: 'llama-3.1-8b-instant',
-    }),
+    groqCheck(),
     ioNetCheck(),
     workersCheck(),
   ]);
