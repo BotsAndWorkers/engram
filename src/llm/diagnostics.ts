@@ -110,9 +110,9 @@ async function findWorkingModels(
   candidateIds: string[],
 ): Promise<string[]> {
   const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-  const checks = candidateIds.slice(0, 12).map(async (modelId) => {
+  const checks = candidateIds.slice(0, 45).map(async (modelId) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4500);
+    const timer = setTimeout(() => controller.abort(), 6000);
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -224,7 +224,7 @@ export async function probeAllProviders(
           configured: true,
           ok: false,
           latencyMs,
-          details: `Проверено ${Math.min(candidates.length, 12)} моделей — бесплатных на этом тире нет (402)`,
+          details: `Проверено ${Math.min(candidates.length, 45)} моделей — бесплатных на этом тире нет (402)`,
         };
       }
       return {

@@ -5,6 +5,7 @@ import type { LLMProvider } from './types';
 import { WorkersAIProvider } from './workers-ai';
 
 const IO_NET_DEFAULT_MODELS = [
+  'nvidia/nemotron-3.5-super-vl',
   'zai-org/GLM-5.3',
   'deepseek-ai/DeepSeek-V4-Pro-0813',
   'moonshotai/Kimi-K3',
