@@ -474,9 +474,14 @@ export function renderMiniAppHtml(): string {
         <div class="brand-sub" id="syncStatus">Персональная база знаний</div>
       </div>
     </div>
-    <button class="icon-btn" id="refreshBtn" title="Обновить">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
-    </button>
+    <div style="display:flex;gap:8px">
+      <button class="icon-btn" id="modelsBtn" title="Модели и лимиты">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+      </button>
+      <button class="icon-btn" id="refreshBtn" title="Обновить">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+      </button>
+    </div>
   </div>
 
   <div class="search-wrap">
@@ -551,7 +556,14 @@ export function renderMiniAppHtml(): string {
         memories: [],
         trackerSummary: [],
         documents: [],
+        settings: {
+          modelOverride: null,
+          providers: { gemini: false, groq: false, ioNet: false, workersAi: true },
+          presets: [],
+        },
       };
+      let probeResults = null;
+      let probing = false;
 
       function haptic(type) {
         try {
@@ -753,12 +765,57 @@ export function renderMiniAppHtml(): string {
         return html;
       }
 
+      function renderModels() {
+        const s = state.settings || {};
+        const current = s.modelOverride || 'auto';
+        const presets = s.presets || [];
+        const p = s.providers || {};
+
+        let html = '<div class="section-head"><span class="section-title">Активная модель</span></div>';
+        html += '<div class="chip-row" style="margin:0 0 14px">' +
+          '<button class="btn-mini ' + (current === 'auto' ? 'accent' : '') + '" data-select-model="auto">Авто (Gemini -> Groq -> io.net)</button>' +
+          presets.map((m) =>
+            '<button class="btn-mini ' + (current === m.id ? 'accent' : '') + '" data-select-model="' + esc(m.id) + '">' + esc(m.label) + '</button>'
+          ).join('') +
+        '</div>';
+
+        html += '<div class="section-head"><span class="section-title">Статус ключей и лимитов</span>' +
+          '<button class="btn-mini accent" id="probeBtn"' + (probing ? ' disabled' : '') + '>' + (probing ? 'Проверка...' : 'Проверить сейчас') + '</button>' +
+        '</div>';
+
+        if (!probeResults) {
+          const baseList = [
+            { name: 'Google Gemini', ok: p.gemini },
+            { name: 'Groq', ok: p.groq },
+            { name: 'io.net', ok: p.ioNet },
+            { name: 'Cloudflare Workers AI', ok: true },
+          ];
+          html += baseList.map((item) => (
+            '<div class="card"><div class="card-row"><div>' +
+              '<div class="card-title">' + esc(item.name) + '</div>' +
+              '<div class="card-meta">' + (item.ok ? 'Ключ настроен. Нажми "Проверить сейчас" для теста и лимитов.' : 'Ключ не добавлен в секреты') + '</div>' +
+            '</div></div></div>'
+          )).join('');
+        } else {
+          html += probeResults.map((r) => (
+            '<div class="card"><div class="card-row"><div>' +
+              '<div class="card-title">' + esc(r.name) + '</div>' +
+              '<div class="card-meta">' + esc(r.details) + (r.latencyMs !== null ? ' · ' + r.latencyMs + ' ms' : '') + '</div>' +
+            '</div>' +
+            '<span class="' + (r.ok ? 'chip' : 'badge-warn') + '">' + (r.ok ? 'OK' : 'Ошибка') + '</span>' +
+            '</div></div>'
+          )).join('');
+        }
+
+        return html;
+      }
+
       function setTab(tab) {
         activeTab = tab;
         for (const el of bottomNav.querySelectorAll('.nav-btn')) {
           el.classList.toggle('active', el.getAttribute('data-tab') === tab);
         }
-        fabBtn.style.display = tab === 'memory' ? 'none' : 'grid';
+        fabBtn.style.display = (tab === 'memory' || tab === 'models') ? 'none' : 'grid';
         render();
       }
 
@@ -769,6 +826,7 @@ export function renderMiniAppHtml(): string {
         else if (activeTab === 'reminders') contentEl.innerHTML = renderReminders();
         else if (activeTab === 'trackers') contentEl.innerHTML = renderTrackers();
         else if (activeTab === 'memory') contentEl.innerHTML = renderMemory();
+        else if (activeTab === 'models') contentEl.innerHTML = renderModels();
       }
 
       function openCreateSheet() {
@@ -880,6 +938,7 @@ export function renderMiniAppHtml(): string {
             memories: data.memories || [],
             trackerSummary: data.trackerSummary || [],
             documents: data.documents || [],
+            settings: data.settings || state.settings,
           };
           syncStatus.textContent = 'Синхронизировано';
           render();
@@ -973,7 +1032,42 @@ export function renderMiniAppHtml(): string {
             haptic('light');
             render();
           } catch (err) { showError(err.message); }
+          return;
         }
+
+        const modelBtn = e.target.closest('[data-select-model]');
+        if (modelBtn) {
+          const model = modelBtn.getAttribute('data-select-model');
+          try {
+            const res = await api('/api/settings/model', {
+              method: 'POST',
+              body: JSON.stringify({ model }),
+            });
+            state.settings.modelOverride = res.modelOverride || null;
+            haptic('medium');
+            render();
+          } catch (err) { showError(err.message); }
+          return;
+        }
+
+        if (e.target.closest('#probeBtn')) {
+          probing = true;
+          render();
+          try {
+            const res = await api('/api/models/check', { method: 'POST' });
+            probeResults = res.results || [];
+          } catch (err) {
+            showError(err.message);
+          } finally {
+            probing = false;
+            render();
+          }
+        }
+      });
+
+      document.getElementById('modelsBtn').addEventListener('click', () => {
+        haptic('light');
+        setTab('models');
       });
 
       fabBtn.addEventListener('click', openCreateSheet);

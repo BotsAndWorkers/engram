@@ -15,9 +15,11 @@ import {
   listRecentDocuments,
   listRecentNotes,
   listReminders,
+  setUserModel,
   toggleListItem,
 } from '../db/queries';
 import { isUserAllowed } from '../telegram/auth';
+import { MODEL_PRESETS } from '../telegram/ui';
 import { renderMiniAppHtml } from './app';
 
 function hexToBytes(hex: string): Uint8Array | null {
@@ -137,7 +139,7 @@ webAppRoutes.get('/api/data', async (c) => {
   const userId = c.get('userId');
   const db = c.env.DB;
 
-  const [notes, reminders, lists, memories, trackerSummary, documents] =
+  const [notes, reminders, lists, memories, trackerSummary, documents, settings] =
     await Promise.all([
       listRecentNotes(db, userId, 30),
       listReminders(db, userId, 'pending', 30),
@@ -145,6 +147,7 @@ webAppRoutes.get('/api/data', async (c) => {
       listMemories(db, userId),
       getTrackerSummary(db, userId, 30),
       listRecentDocuments(db, userId, 20),
+      getUserSettings(db, userId),
     ]);
 
   return c.json({
@@ -154,6 +157,16 @@ webAppRoutes.get('/api/data', async (c) => {
     memories,
     trackerSummary,
     documents,
+    settings: {
+      modelOverride: settings?.model_override ?? null,
+      providers: {
+        gemini: Boolean(c.env.GEMINI_API_KEY),
+        groq: Boolean(c.env.GROQ_API_KEY),
+        ioNet: Boolean(c.env.IO_API_KEY),
+        workersAi: true,
+      },
+      presets: MODEL_PRESETS,
+    },
   });
 });
 
@@ -317,4 +330,170 @@ webAppRoutes.delete('/api/memories/:id', async (c) => {
   }
   const deleted = await deleteMemoryById(c.env.DB, userId, memId);
   return c.json({ ok: deleted });
+});
+
+webAppRoutes.post('/api/settings/model', async (c) => {
+  const userId = c.get('userId');
+  let body: { model?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  const raw = typeof body.model === 'string' ? body.model.trim() : '';
+  const nextModel = !raw || raw === 'auto' ? null : raw;
+  await setUserModel(c.env.DB, userId, nextModel);
+  return c.json({ ok: true, modelOverride: nextModel });
+});
+
+interface ProviderProbeResult {
+  id: string;
+  name: string;
+  configured: boolean;
+  ok: boolean;
+  latencyMs: number | null;
+  details: string;
+}
+
+async function probeOpenAIProvider(params: {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+}): Promise<ProviderProbeResult> {
+  if (!params.apiKey) {
+    return {
+      id: params.id,
+      name: params.name,
+      configured: false,
+      ok: false,
+      latencyMs: null,
+      details: 'Ключ не добавлен в секреты',
+    };
+  }
+
+  const start = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
+
+  try {
+    const res = await fetch(
+      `${params.baseUrl.replace(/\/$/, '')}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: params.model,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 5,
+        }),
+        signal: controller.signal,
+      },
+    );
+
+    const latencyMs = Date.now() - start;
+    const remReq = res.headers.get('x-ratelimit-remaining-requests');
+    const remTok = res.headers.get('x-ratelimit-remaining-tokens');
+    const rateInfo = [
+      remReq ? `запросов: ${remReq}` : '',
+      remTok ? `токенов: ${remTok}` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return {
+        id: params.id,
+        name: params.name,
+        configured: true,
+        ok: false,
+        latencyMs,
+        details: `HTTP ${res.status}: ${errText.slice(0, 140)}`,
+      };
+    }
+
+    return {
+      id: params.id,
+      name: params.name,
+      configured: true,
+      ok: true,
+      latencyMs,
+      details: rateInfo ? `Доступен (${rateInfo})` : `Доступен (${params.model})`,
+    };
+  } catch (err) {
+    return {
+      id: params.id,
+      name: params.name,
+      configured: true,
+      ok: false,
+      latencyMs: Date.now() - start,
+      details: err instanceof Error ? err.message : 'Network error',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+webAppRoutes.post('/api/models/check', async (c) => {
+  const workersCheck = async (): Promise<ProviderProbeResult> => {
+    const start = Date.now();
+    const model =
+      c.env.WORKERS_AI_MODEL || '@cf/google/gemma-4-26b-a4b-it';
+    try {
+      await c.env.AI.run(model as keyof AiModels, {
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 5,
+      });
+      return {
+        id: 'workers-ai',
+        name: 'Cloudflare Workers AI',
+        configured: true,
+        ok: true,
+        latencyMs: Date.now() - start,
+        details: `Доступен (${model})`,
+      };
+    } catch (err) {
+      return {
+        id: 'workers-ai',
+        name: 'Cloudflare Workers AI',
+        configured: true,
+        ok: false,
+        latencyMs: Date.now() - start,
+        details: err instanceof Error ? err.message.slice(0, 140) : 'Error',
+      };
+    }
+  };
+
+  const results = await Promise.all([
+    probeOpenAIProvider({
+      id: 'gemini',
+      name: 'Google Gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      apiKey: c.env.GEMINI_API_KEY,
+      model: 'gemini-2.5-flash',
+    }),
+    probeOpenAIProvider({
+      id: 'groq',
+      name: 'Groq',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      apiKey: c.env.GROQ_API_KEY,
+      model: 'llama-3.3-70b-versatile',
+    }),
+    probeOpenAIProvider({
+      id: 'io-net',
+      name: 'io.net',
+      baseUrl: 'https://api.intelligence.io.solutions/api/v1',
+      apiKey: c.env.IO_API_KEY,
+      model: 'meta-llama/Llama-3.3-70B-Instruct',
+    }),
+    workersCheck(),
+  ]);
+
+  return c.json({ results });
 });
