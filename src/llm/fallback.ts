@@ -21,21 +21,20 @@ export class FallbackLLMProvider implements LLMProvider {
     messages: ChatMessage[],
     tools: ToolDefinition[],
   ): Promise<LLMResponse> {
-    let lastError: unknown;
+    const errors: string[] = [];
     for (const provider of this.providers) {
       try {
         return await provider.chat(messages, tools);
       } catch (err) {
-        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${provider.name}: ${msg}`);
         console.warn(`LLM provider ${provider.name} failed, trying next`, {
           model: provider.model,
-          error: err instanceof Error ? err.message : String(err),
+          error: msg,
         });
       }
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('All LLM providers failed');
+    throw new Error(`All LLM providers failed:\n${errors.join('\n')}`);
   }
 
   async chatStream(
@@ -43,7 +42,7 @@ export class FallbackLLMProvider implements LLMProvider {
     tools: ToolDefinition[],
     onDelta: (partialText: string) => Promise<void> | void,
   ): Promise<LLMResponse> {
-    let lastError: unknown;
+    const errors: string[] = [];
     for (const provider of this.providers) {
       try {
         if (provider.chatStream) {
@@ -53,15 +52,14 @@ export class FallbackLLMProvider implements LLMProvider {
         if (res.content) await onDelta(res.content);
         return res;
       } catch (err) {
-        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${provider.name}: ${msg}`);
         console.warn(`LLM stream ${provider.name} failed, trying next`, {
           model: provider.model,
-          error: err instanceof Error ? err.message : String(err),
+          error: msg,
         });
       }
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('All LLM providers failed');
+    throw new Error(`All LLM providers failed:\n${errors.join('\n')}`);
   }
 }

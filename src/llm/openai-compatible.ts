@@ -154,12 +154,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
           role: 'tool',
           content: msg.content,
           tool_call_id: msg.tool_call_id,
-          ...(msg.name ? { name: msg.name } : {}),
         };
       }
       return {
         role: msg.role,
-        content: msg.content,
+        content: msg.content || ' ',
       };
     });
 
