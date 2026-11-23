@@ -8,6 +8,7 @@ import {
   createReminder,
   deleteMemoryById,
   deleteNote,
+  deleteReminder,
   getListItems,
   getTrackerSummary,
   getUserSettings,
@@ -17,6 +18,8 @@ import {
   listReminders,
   setUserModel,
   toggleListItem,
+  updateNote,
+  updateReminder,
 } from '../db/queries';
 import {
   getProviderCatalogPage,
@@ -216,6 +219,31 @@ webAppRoutes.delete('/api/notes/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+webAppRoutes.put('/api/notes/:id', async (c) => {
+  const userId = c.get('userId');
+  const noteId = Number.parseInt(c.req.param('id'), 10);
+  if (!Number.isFinite(noteId) || noteId <= 0) {
+    return c.json({ error: 'Invalid note id' }, 400);
+  }
+
+  let body: { title?: unknown; content?: unknown; tags?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  const note = await updateNote(c.env.DB, userId, noteId, {
+    title: typeof body.title === 'string' ? body.title : undefined,
+    content: typeof body.content === 'string' ? body.content : undefined,
+    tags: typeof body.tags === 'string' ? body.tags : undefined,
+  });
+  if (!note) {
+    return c.json({ error: 'Note not found' }, 404);
+  }
+  return c.json({ ok: true, note });
+});
+
 webAppRoutes.post('/api/lists/:id/toggle', async (c) => {
   const userId = c.get('userId');
   const itemId = Number.parseInt(c.req.param('id'), 10);
@@ -246,7 +274,12 @@ webAppRoutes.post('/api/reminders/:id/done', async (c) => {
 
 webAppRoutes.post('/api/reminders', async (c) => {
   const userId = c.get('userId');
-  let body: { text?: unknown; inMinutes?: unknown };
+  let body: {
+    text?: unknown;
+    inMinutes?: unknown;
+    dueAtIso?: unknown;
+    repeatMinutes?: unknown;
+  };
   try {
     body = await c.req.json();
   } catch {
@@ -254,20 +287,85 @@ webAppRoutes.post('/api/reminders', async (c) => {
   }
 
   const text = typeof body.text === 'string' ? body.text.trim() : '';
-  const mins = Number(body.inMinutes ?? 60);
   if (!text) return c.json({ error: 'text is required' }, 400);
-  if (!Number.isFinite(mins) || mins <= 0) {
-    return c.json({ error: 'Positive inMinutes required' }, 400);
+
+  let dueAt: number | null = null;
+  if (typeof body.dueAtIso === 'string' && body.dueAtIso.trim()) {
+    const parsed = Date.parse(body.dueAtIso.trim());
+    if (Number.isFinite(parsed)) dueAt = parsed;
+  } else {
+    const mins = Number(body.inMinutes ?? 60);
+    if (Number.isFinite(mins) && mins > 0) {
+      dueAt = Date.now() + Math.round(mins * 60_000);
+    }
   }
+  if (!dueAt) return c.json({ error: 'Valid due date is required' }, 400);
+
+  const repeatIntervalMinutes =
+    body.repeatMinutes !== undefined && Number(body.repeatMinutes) > 0
+      ? Math.round(Number(body.repeatMinutes))
+      : null;
 
   const settings = await getUserSettings(c.env.DB, userId);
   const reminder = await createReminder(c.env.DB, {
     userId,
     chatId: settings?.chat_id ?? userId,
     text,
-    dueAt: Date.now() + Math.round(mins * 60_000),
+    dueAt,
+    repeatIntervalMinutes,
   });
   return c.json({ ok: true, reminder }, 201);
+});
+
+webAppRoutes.put('/api/reminders/:id', async (c) => {
+  const userId = c.get('userId');
+  const reminderId = Number.parseInt(c.req.param('id'), 10);
+  if (!Number.isFinite(reminderId) || reminderId <= 0) {
+    return c.json({ error: 'Invalid reminder id' }, 400);
+  }
+
+  let body: { text?: unknown; dueAtIso?: unknown; repeatMinutes?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON' }, 400);
+  }
+
+  let dueAt: number | undefined;
+  if (typeof body.dueAtIso === 'string' && body.dueAtIso.trim()) {
+    const parsed = Date.parse(body.dueAtIso.trim());
+    if (!Number.isFinite(parsed)) {
+      return c.json({ error: 'Invalid dueAtIso' }, 400);
+    }
+    dueAt = parsed;
+  }
+
+  const repeatIntervalMinutes =
+    body.repeatMinutes === null || body.repeatMinutes === 0 || body.repeatMinutes === ''
+      ? null
+      : body.repeatMinutes !== undefined && Number(body.repeatMinutes) > 0
+        ? Math.round(Number(body.repeatMinutes))
+        : undefined;
+
+  const reminder = await updateReminder(c.env.DB, userId, reminderId, {
+    text: typeof body.text === 'string' ? body.text : undefined,
+    dueAt,
+    repeatIntervalMinutes,
+  });
+  if (!reminder) {
+    return c.json({ error: 'Reminder not found' }, 404);
+  }
+  return c.json({ ok: true, reminder });
+});
+
+webAppRoutes.delete('/api/reminders/:id', async (c) => {
+  const userId = c.get('userId');
+  const reminderId = Number.parseInt(c.req.param('id'), 10);
+  if (!Number.isFinite(reminderId) || reminderId <= 0) {
+    return c.json({ error: 'Invalid reminder id' }, 400);
+  }
+  const deleted = await deleteReminder(c.env.DB, userId, reminderId);
+  return c.json({ ok: deleted });
 });
 
 webAppRoutes.post('/api/lists', async (c) => {

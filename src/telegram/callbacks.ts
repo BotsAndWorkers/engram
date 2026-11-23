@@ -29,6 +29,7 @@ import {
   buildMemoryScreen,
   buildNoteDetailScreen,
   buildNotesScreen,
+  buildReminderDetailScreen,
   buildRemindersScreen,
   buildSettingsScreen,
   CHECKIN_PRESETS,
@@ -396,6 +397,17 @@ export async function handleCallbackQuery(
       return;
     }
 
+    if (action === 'view') {
+      await telegram.answerCallbackQuery(query.id);
+      await renderScreen(
+        telegram,
+        chatId,
+        messageId,
+        await buildReminderDetailScreen(env, userId, reminderId),
+      );
+      return;
+    }
+
     if (action === 'done') {
       const fromList = parts[3] === 'list';
       const ok = await completeReminder(env.DB, userId, reminderId);
@@ -422,7 +434,7 @@ export async function handleCallbackQuery(
 
     if (action === 'snooze') {
       const minutes = Number.parseInt(parts[3] ?? '60', 10);
-      const fromList = parts[4] === 'list';
+      const mode = parts[4];
       const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 60;
       const updated = await snoozeReminder(
         env.DB,
@@ -440,8 +452,15 @@ export async function handleCallbackQuery(
       const timezone = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
       const nextLocal = formatLocalTime(updated.due_at, timezone);
 
-      await telegram.answerCallbackQuery(query.id, `Отложено до ${nextLocal}`);
-      if (fromList) {
+      await telegram.answerCallbackQuery(query.id, `Перенесено на ${nextLocal}`);
+      if (mode === 'detail') {
+        await renderScreen(
+          telegram,
+          chatId,
+          messageId,
+          await buildReminderDetailScreen(env, userId, reminderId),
+        );
+      } else if (mode === 'list') {
         await renderScreen(
           telegram,
           chatId,

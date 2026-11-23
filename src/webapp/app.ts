@@ -548,6 +548,8 @@ export function renderMiniAppHtml(): string {
       let query = '';
       let activeListFilter = '';
       const expandedNotes = new Set();
+      let showAllMemories = false;
+      let editingTarget = null; // { type: 'note' | 'reminder', id: number }
 
       let state = {
         notes: [],
@@ -659,6 +661,7 @@ export function renderMiniAppHtml(): string {
                 '</div>' +
                 '<div class="card-actions">' +
                   '<button class="btn-mini" data-expand-note="' + n.id + '">' + (isOpen ? 'Свернуть' : 'Открыть') + '</button>' +
+                  '<button class="btn-mini accent" data-edit-note="' + n.id + '">Изменить</button>' +
                   '<button class="btn-mini danger" data-delete-note="' + n.id + '">Удалить</button>' +
                 '</div>' +
               '</div>' +
@@ -697,7 +700,7 @@ export function renderMiniAppHtml(): string {
 
       function renderReminders() {
         const items = state.reminders.filter((r) => matchesQuery(r.text));
-        if (!items.length) return '<div class="empty">Активных напоминаний нет.</div>';
+        if (!items.length) return '<div class="empty">Активных напоминаний нет. Нажмите + чтобы создать.</div>';
 
         const now = Date.now();
         return items.map((r) => {
@@ -710,7 +713,11 @@ export function renderMiniAppHtml(): string {
                   '<div class="card-meta">' + esc(fmtDate(r.due_at)) + (r.repeat_interval_minutes ? ' · повтор каждые ' + r.repeat_interval_minutes + ' мин' : '') + '</div>' +
                   (overdue ? '<div style="margin-top:6px"><span class="badge-warn">Просрочено</span></div>' : '') +
                 '</div>' +
-                '<button class="btn-mini accent" data-done-reminder="' + r.id + '">Готово</button>' +
+                '<div class="card-actions">' +
+                  '<button class="btn-mini" data-edit-reminder="' + r.id + '">Изменить</button>' +
+                  '<button class="btn-mini accent" data-done-reminder="' + r.id + '">Готово</button>' +
+                  '<button class="btn-mini danger" data-delete-reminder="' + r.id + '">×</button>' +
+                '</div>' +
               '</div>' +
             '</div>'
           );
@@ -737,21 +744,24 @@ export function renderMiniAppHtml(): string {
         const mems = state.memories.filter((m) => matchesQuery(m.key + ' ' + m.value));
         const docs = state.documents.filter((d) => matchesQuery(d.file_name + ' ' + d.content));
 
-        let html = '<div class="section-head"><span class="section-title">Факты памяти (' + mems.length + ')</span></div>';
+        let html = '<div class="section-head"><span class="section-title">Факты памяти (' + mems.length + ')</span>';
+        if (mems.length > 10) {
+          html += '<button class="btn-mini" id="toggleAllMem">' + (showAllMemories ? 'Свернуть' : 'Показать все') + '</button>';
+        }
+        html += '</div>';
+
         if (!mems.length) {
           html += '<div class="empty" style="margin-bottom:14px">Фактов не найдено.</div>';
         } else {
-          html += mems.map((m) => (
-            '<div class="card">' +
-              '<div class="card-row">' +
-                '<div>' +
-                  '<div class="card-title">' + esc(m.key) + '</div>' +
-                  '<div class="card-body" style="margin-top:4px">' + esc(m.value) + '</div>' +
-                '</div>' +
-                '<button class="btn-mini danger" data-delete-memory="' + m.id + '">Удалить</button>' +
-              '</div>' +
-            '</div>'
-          )).join('');
+          const visibleMems = showAllMemories ? mems : mems.slice(0, 10);
+          html += '<div class="card" style="padding:10px 12px"><div class="chip-row" style="margin-top:0">' +
+            visibleMems.map((m) => (
+              '<span class="chip" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;font-size:12px">' +
+                '<span><b>' + esc(m.key) + ':</b> ' + esc(m.value) + '</span>' +
+                '<button data-delete-memory="' + m.id + '" style="background:none;border:none;color:inherit;cursor:pointer;font-weight:700;padding:0 2px" title="Удалить">×</button>' +
+              '</span>'
+            )).join('') +
+          '</div></div>';
         }
 
         html += '<div class="section-head" style="margin-top:14px"><span class="section-title">Документы (' + docs.length + ')</span></div>';
@@ -893,12 +903,44 @@ export function renderMiniAppHtml(): string {
         else if (activeTab === 'models') contentEl.innerHTML = renderModels();
       }
 
-      function openCreateSheet() {
+      function toLocalDateTimeInput(epochMs) {
+        const d = new Date(epochMs);
+        const pad = (n) => String(n).padStart(2, '0');
+        return (
+          d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+          'T' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+        );
+      }
+
+      function openCreateSheet(target) {
         haptic('light');
+        editingTarget = target || null;
         let title = 'Новая заметка';
         let bodyHtml = '';
 
-        if (activeTab === 'lists') {
+        if (editingTarget && editingTarget.type === 'note') {
+          const note = state.notes.find((n) => n.id === editingTarget.id);
+          if (!note) return;
+          title = 'Редактировать заметку #' + note.id;
+          bodyHtml =
+            '<input class="field" id="mNoteTitle" placeholder="Заголовок" value="' + esc(note.title) + '" />' +
+            '<textarea class="field" id="mNoteContent" placeholder="Текст заметки..." required>' + esc(note.content) + '</textarea>' +
+            '<input class="field" id="mNoteTags" placeholder="Теги через запятую" value="' + esc(note.tags || '') + '" />' +
+            '<button class="btn-primary" id="mSubmit">Сохранить изменения</button>';
+        } else if (editingTarget && editingTarget.type === 'reminder') {
+          const rem = state.reminders.find((r) => r.id === editingTarget.id);
+          if (!rem) return;
+          title = 'Изменить напоминание #' + rem.id;
+          bodyHtml =
+            '<input class="field" id="mRemText" placeholder="О чем напомнить?" value="' + esc(rem.text) + '" required />' +
+            '<input class="field" id="mRemDue" type="datetime-local" value="' + toLocalDateTimeInput(rem.due_at) + '" required />' +
+            '<select class="field" id="mRemRepeat">' +
+              '<option value="0"' + (!rem.repeat_interval_minutes ? ' selected' : '') + '>Без повтора</option>' +
+              '<option value="1440"' + (rem.repeat_interval_minutes === 1440 ? ' selected' : '') + '>Каждый день</option>' +
+              '<option value="10080"' + (rem.repeat_interval_minutes === 10080 ? ' selected' : '') + '>Каждую неделю</option>' +
+            '</select>' +
+            '<button class="btn-primary" id="mSubmit">Сохранить изменения</button>';
+        } else if (activeTab === 'lists') {
           title = 'Добавить в список';
           bodyHtml =
             '<input class="field" id="mListName" placeholder="Название списка (например: покупки)" value="' + esc(activeListFilter || 'покупки') + '" />' +
@@ -908,11 +950,11 @@ export function renderMiniAppHtml(): string {
           title = 'Новое напоминание';
           bodyHtml =
             '<input class="field" id="mRemText" placeholder="О чем напомнить?" required />' +
-            '<select class="field" id="mRemMins">' +
-              '<option value="15">Через 15 минут</option>' +
-              '<option value="60" selected>Через 1 час</option>' +
-              '<option value="180">Через 3 часа</option>' +
-              '<option value="1440">Завтра в это же время</option>' +
+            '<input class="field" id="mRemDue" type="datetime-local" value="' + toLocalDateTimeInput(Date.now() + 3600000) + '" required />' +
+            '<select class="field" id="mRemRepeat">' +
+              '<option value="0" selected>Без повтора</option>' +
+              '<option value="1440">Каждый день</option>' +
+              '<option value="10080">Каждую неделю</option>' +
             '</select>' +
             '<button class="btn-primary" id="mSubmit">Создать напоминание</button>';
         } else if (activeTab === 'trackers') {
@@ -953,7 +995,34 @@ export function renderMiniAppHtml(): string {
         const btn = document.getElementById('mSubmit');
         btn.disabled = true;
         try {
-          if (activeTab === 'lists') {
+          if (editingTarget && editingTarget.type === 'note') {
+            const title = document.getElementById('mNoteTitle').value.trim();
+            const content = document.getElementById('mNoteContent').value.trim();
+            const tags = document.getElementById('mNoteTags').value.trim();
+            if (!content && !title) return;
+            const res = await api('/api/notes/' + editingTarget.id, {
+              method: 'PUT',
+              body: JSON.stringify({ title, content, tags }),
+            });
+            if (res.note) {
+              state.notes = state.notes.map((n) => (n.id === res.note.id ? res.note : n));
+            }
+          } else if (editingTarget && editingTarget.type === 'reminder') {
+            const text = document.getElementById('mRemText').value.trim();
+            const dueLocal = document.getElementById('mRemDue').value;
+            const repeatMinutes = Number(document.getElementById('mRemRepeat').value);
+            if (!text || !dueLocal) return;
+            const dueAtIso = new Date(dueLocal).toISOString();
+            const res = await api('/api/reminders/' + editingTarget.id, {
+              method: 'PUT',
+              body: JSON.stringify({ text, dueAtIso, repeatMinutes }),
+            });
+            if (res.reminder) {
+              state.reminders = state.reminders.map((r) =>
+                r.id === res.reminder.id ? res.reminder : r
+              );
+            }
+          } else if (activeTab === 'lists') {
             const listName = document.getElementById('mListName').value.trim();
             const text = document.getElementById('mListText').value.trim();
             if (!text) return;
@@ -961,9 +1030,14 @@ export function renderMiniAppHtml(): string {
             if (res.item) state.lists.unshift(res.item);
           } else if (activeTab === 'reminders') {
             const text = document.getElementById('mRemText').value.trim();
-            const inMinutes = Number(document.getElementById('mRemMins').value);
-            if (!text) return;
-            const res = await api('/api/reminders', { method: 'POST', body: JSON.stringify({ text, inMinutes }) });
+            const dueLocal = document.getElementById('mRemDue').value;
+            const repeatMinutes = Number(document.getElementById('mRemRepeat').value);
+            if (!text || !dueLocal) return;
+            const dueAtIso = new Date(dueLocal).toISOString();
+            const res = await api('/api/reminders', {
+              method: 'POST',
+              body: JSON.stringify({ text, dueAtIso, repeatMinutes }),
+            });
             if (res.reminder) state.reminders.push(res.reminder);
           } else if (activeTab === 'trackers') {
             const category = document.getElementById('mTrCat').value.trim();
@@ -1042,6 +1116,15 @@ export function renderMiniAppHtml(): string {
           return;
         }
 
+        const editNoteBtn = e.target.closest('[data-edit-note]');
+        if (editNoteBtn) {
+          openCreateSheet({
+            type: 'note',
+            id: Number(editNoteBtn.getAttribute('data-edit-note')),
+          });
+          return;
+        }
+
         const delNoteBtn = e.target.closest('[data-delete-note]');
         if (delNoteBtn) {
           const id = delNoteBtn.getAttribute('data-delete-note');
@@ -1075,6 +1158,27 @@ export function renderMiniAppHtml(): string {
           return;
         }
 
+        const editRemBtn = e.target.closest('[data-edit-reminder]');
+        if (editRemBtn) {
+          openCreateSheet({
+            type: 'reminder',
+            id: Number(editRemBtn.getAttribute('data-edit-reminder')),
+          });
+          return;
+        }
+
+        const delRemBtn = e.target.closest('[data-delete-reminder]');
+        if (delRemBtn) {
+          const id = delRemBtn.getAttribute('data-delete-reminder');
+          try {
+            await api('/api/reminders/' + id, { method: 'DELETE' });
+            state.reminders = state.reminders.filter((r) => String(r.id) !== String(id));
+            haptic('light');
+            render();
+          } catch (err) { showError(err.message); }
+          return;
+        }
+
         const remBtn = e.target.closest('[data-done-reminder]');
         if (remBtn) {
           const id = remBtn.getAttribute('data-done-reminder');
@@ -1084,6 +1188,12 @@ export function renderMiniAppHtml(): string {
             haptic('medium');
             render();
           } catch (err) { showError(err.message); }
+          return;
+        }
+
+        if (e.target.closest('#toggleAllMem')) {
+          showAllMemories = !showAllMemories;
+          render();
           return;
         }
 
@@ -1170,7 +1280,7 @@ export function renderMiniAppHtml(): string {
         setTab('models');
       });
 
-      fabBtn.addEventListener('click', openCreateSheet);
+      fabBtn.addEventListener('click', () => openCreateSheet(null));
       modalBackdrop.addEventListener('click', (e) => {
         if (e.target === modalBackdrop) closeSheet();
       });

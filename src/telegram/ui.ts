@@ -327,23 +327,14 @@ export async function buildRemindersScreen(
 
   const keyboard: InlineKeyboardButton[][] = [filterRow];
 
-  if (status === 'pending') {
-    for (const r of rows.slice(0, 5)) {
-      keyboard.push([
-        { text: `#${r.id} Готово`, callback_data: `rem:done:${r.id}:list` },
-        {
-          text: `#${r.id} +1ч`,
-          callback_data: `rem:snooze:${r.id}:60:list`,
-        },
-        { text: `#${r.id} Удалить`, callback_data: `rem:del:${r.id}` },
-      ]);
-    }
-  } else {
-    for (const r of rows.slice(0, 5)) {
-      keyboard.push([
-        { text: `#${r.id} Удалить`, callback_data: `rem:del:${r.id}:done` },
-      ]);
-    }
+  for (const r of rows.slice(0, 8)) {
+    const short = r.text.length > 28 ? `${r.text.slice(0, 28)}...` : r.text;
+    keyboard.push([
+      {
+        text: `#${r.id} ${short}`,
+        callback_data: `rem:view:${r.id}`,
+      },
+    ]);
   }
 
   keyboard.push([
@@ -354,12 +345,68 @@ export async function buildRemindersScreen(
   return {
     text: [
       status === 'pending'
-        ? 'Активные напоминания:'
+        ? 'Активные напоминания (нажми на задачу для управления):'
         : 'Выполненные напоминания:',
       '',
       ...lines,
     ].join('\n'),
     replyMarkup: { inline_keyboard: keyboard },
+  };
+}
+
+export async function buildReminderDetailScreen(
+  env: AppEnv,
+  userId: number,
+  reminderId: number,
+): Promise<ScreenView> {
+  const [settings, rows] = await Promise.all([
+    getUserSettings(env.DB, userId),
+    listReminders(env.DB, userId, 'all', 50),
+  ]);
+  const r = rows.find((item) => item.id === reminderId);
+  if (!r) {
+    return {
+      text: `Напоминание #${reminderId} не найдено.`,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: 'К списку', callback_data: 'menu:rems:pending' }],
+        ],
+      },
+    };
+  }
+
+  const timezone = settings?.timezone || env.DEFAULT_TIMEZONE || 'UTC';
+  const repeat = r.repeat_interval_minutes
+    ? `Повтор: каждые ${r.repeat_interval_minutes} мин.`
+    : 'Одноразовое';
+
+  return {
+    text: [
+      `Напоминание #${r.id}`,
+      `Текст: ${r.text}`,
+      `Время: ${formatLocalTime(r.due_at, timezone)}`,
+      `Статус: ${r.status === 'pending' ? 'активно' : 'выполнено'} | ${repeat}`,
+      '',
+      'Чтобы изменить текст или точное время в чате, просто напиши, например: "перенеси напоминание #' +
+        r.id +
+        ' на завтра в 15:00".',
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          { text: '+15 мин', callback_data: `rem:snooze:${r.id}:15:detail` },
+          { text: '+1 час', callback_data: `rem:snooze:${r.id}:60:detail` },
+          { text: '+1 день', callback_data: `rem:snooze:${r.id}:1440:detail` },
+        ],
+        [
+          ...(r.status === 'pending'
+            ? [{ text: 'Выполнено', callback_data: `rem:done:${r.id}:list` }]
+            : []),
+          { text: 'Удалить', callback_data: `rem:del:${r.id}:${r.status}` },
+        ],
+        [{ text: 'К списку', callback_data: `menu:rems:${r.status === 'done' ? 'done' : 'pending'}` }],
+      ],
+    },
   };
 }
 

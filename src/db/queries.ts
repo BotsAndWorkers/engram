@@ -472,6 +472,37 @@ export async function deleteReminder(
   return (result.meta.changes ?? 0) > 0;
 }
 
+export async function updateReminder(
+  db: D1Database,
+  userId: number,
+  reminderId: number,
+  patch: {
+    text?: string;
+    dueAt?: number;
+    repeatIntervalMinutes?: number | null;
+  },
+): Promise<ReminderRow | null> {
+  const existing = await db
+    .prepare('SELECT * FROM reminders WHERE id = ? AND user_id = ?')
+    .bind(reminderId, userId)
+    .first<ReminderRow>();
+  if (!existing) return null;
+
+  const nextText = patch.text !== undefined ? patch.text.trim() : existing.text;
+  const nextDue = patch.dueAt !== undefined ? patch.dueAt : existing.due_at;
+  const nextRepeat =
+    patch.repeatIntervalMinutes !== undefined
+      ? patch.repeatIntervalMinutes
+      : existing.repeat_interval_minutes;
+
+  return db
+    .prepare(
+      "UPDATE reminders SET text = ?, due_at = ?, repeat_interval_minutes = ?, status = 'pending' WHERE id = ? AND user_id = ? RETURNING *",
+    )
+    .bind(nextText, nextDue, nextRepeat, reminderId, userId)
+    .first<ReminderRow>();
+}
+
 /* ---------------- Long-term Memory ---------------- */
 
 export async function upsertMemory(

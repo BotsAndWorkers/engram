@@ -30,6 +30,7 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   create_reminder: 'Создаю напоминание...',
   list_reminders: 'Проверяю напоминания...',
   complete_reminder: 'Отмечаю напоминание выполненным...',
+  update_reminder: 'Обновляю напоминание...',
   delete_reminder: 'Удаляю напоминание...',
   add_to_list: 'Обновляю список...',
   get_list: 'Проверяю списки...',
