@@ -104,18 +104,25 @@ async function handleUpdate(
     if (msg.photo && msg.photo.length > 0) {
       await telegram.sendChatAction(chatId, 'typing');
       const bestPhoto =
-        msg.photo.find((p) => p.width >= 600) ??
+        msg.photo.find((p) => p.width >= 320 && p.width <= 900) ??
         msg.photo[msg.photo.length - 1];
-      const imageBuffer = await telegram.getFileBytes(bestPhoto.file_id);
       const visionModel =
         env.WORKERS_AI_VISION_MODEL ||
         '@cf/meta/llama-4-scout-17b-16e-instruct';
-      const visionDescription = await describeImageWithWorkersAI(
-        env.AI,
-        visionModel,
-        imageBuffer,
-        userText || undefined,
-      );
+
+      let visionDescription: string;
+      try {
+        const imageBuffer = await telegram.getFileBytes(bestPhoto.file_id);
+        visionDescription = await describeImageWithWorkersAI(
+          env.AI,
+          visionModel,
+          imageBuffer,
+          userText || undefined,
+        );
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : 'Unknown error';
+        throw new Error(`Ошибка анализа изображения: ${reason}`);
+      }
 
       if (!visionDescription) {
         await telegram.sendMessage(

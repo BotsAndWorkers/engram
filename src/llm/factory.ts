@@ -15,6 +15,6 @@ export function createLLMProvider(
   }
 
   const model =
-    modelOverride || env.WORKERS_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    modelOverride || env.WORKERS_AI_MODEL || '@cf/google/gemma-4-26b-a4b-it';
   return new WorkersAIProvider(env.AI, model);
 }

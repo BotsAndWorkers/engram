@@ -16,7 +16,11 @@ import {
   MODEL_PRESETS,
   TIMEZONE_PRESETS,
 } from '../src/telegram/ui';
-import { isPublicHttpUrl } from '../src/tools/web';
+import {
+  decodeDuckDuckGoUrl,
+  isPublicHttpUrl,
+  parseDuckDuckGoHtml,
+} from '../src/tools/web';
 
 describe('buildSafeFtsQuery', () => {
   it('escapes special characters into prefix tokens', () => {
@@ -254,5 +258,30 @@ describe('parseCompactionJson', () => {
     expect(prompt).toContain('city: Novosibirsk');
     expect(prompt).toContain('<recent_summary>');
     expect(prompt).toContain('<rules>');
+  });
+});
+
+describe('web_search DuckDuckGo parser', () => {
+  it('decodes uddg redirect URLs and parses search results', () => {
+    expect(
+      decodeDuckDuckGoUrl(
+        '//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs&rut=abc',
+      ),
+    ).toBe('https://example.com/docs');
+
+    const sampleHtml = `
+      <div class="result">
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcloudflare.com%2Fworkers">Cloudflare <b>Workers</b></a>
+        <a class="result__snippet">Serverless edge runtime &amp; AI.</a>
+      </div>
+    `;
+    const parsed = parseDuckDuckGoHtml(sampleHtml, 5);
+    expect(parsed).toEqual([
+      {
+        title: 'Cloudflare Workers',
+        url: 'https://cloudflare.com/workers',
+        snippet: 'Serverless edge runtime & AI.',
+      },
+    ]);
   });
 });

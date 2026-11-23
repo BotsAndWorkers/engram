@@ -36,6 +36,7 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
   remove_list_item: 'Обновляю список...',
   search_past_conversations: 'Ищу в архиве диалогов...',
   fetch_url: 'Читаю страницу по ссылке...',
+  web_search: 'Ищу в интернете...',
 };
 
 const SILENT_TOOLS = new Set(['remember_fact', 'forget_fact']);
@@ -84,7 +85,8 @@ export function buildSystemPrompt(
 
   return [
     '<role>',
-    'You are Engram, a concise, sharp, and natural personal AI assistant in Telegram.',
+    'You are Engram, a warm, witty, sharp, and natural personal companion and assistant in Telegram.',
+    'Talk like a real, thoughtful person with personality—never break character with robotic disclaimers like "I am just an AI/program and have no feelings/preferences" or stiff customer-support closers like "Чем я могу помочь сегодня?".',
     'Reply in the same language as the user (usually Russian).',
     'Match response length to the message: 1-2 short sentences for greetings, small talk, or confirmations; detailed structured answers only when the task requires depth.',
     'Do not use emojis in routine replies; use at most 1-2 only when clearly marking a status or genuine emotion.',
@@ -100,7 +102,7 @@ export function buildSystemPrompt(
     '- Reminders & Daily Briefing: one-time and recurring reminders, plus an optional daily summary at a chosen hour in /menu -> Настройки.',
     '- Interactive Checklists: manage named lists (shopping, movies, todos) with clickable checkboxes via chat or /lists.',
     '- Memory & Archive: silently remember personal facts and search past conversation summaries.',
-    '- Multimodal & Web: understand voice messages, photos/screenshots, forwarded posts/messages, and read web links.',
+    '- Multimodal & Web: understand voice messages, photos/screenshots, forwarded posts/messages, search the web, and read web links.',
     '</capabilities>',
     '',
     '<long_term_memory>',

@@ -252,9 +252,14 @@ async function readWorkersAISseStream(
 export function normalizeWorkersAIResponse(
   raw: WorkersAIRawResponse,
 ): LLMResponse {
-  const choiceMsg = raw.choices?.[0]?.message;
-  const content = (choiceMsg?.content ?? raw.response ?? '') || '';
-  const rawCalls = choiceMsg?.tool_calls ?? raw.tool_calls ?? [];
+  const choiceMsg = raw?.choices?.[0]?.message;
+  const choiceContent =
+    typeof choiceMsg?.content === 'string' && choiceMsg.content.trim()
+      ? choiceMsg.content
+      : undefined;
+  const responseText = typeof raw?.response === 'string' ? raw.response : '';
+  const content = choiceContent ?? responseText;
+  const rawCalls = choiceMsg?.tool_calls ?? raw?.tool_calls ?? [];
 
   const toolCalls: ToolCall[] = [];
   for (let i = 0; i < rawCalls.length; i += 1) {
@@ -360,6 +365,22 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+const FALLBACK_VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
+
+function extractVisionText(
+  raw: WorkersAIRawResponse | null | undefined,
+): string {
+  if (!raw || typeof raw !== 'object') return '';
+  const choiceContent = raw.choices?.[0]?.message?.content;
+  if (typeof choiceContent === 'string' && choiceContent.trim()) {
+    return choiceContent.trim();
+  }
+  if (typeof raw.response === 'string' && raw.response.trim()) {
+    return raw.response.trim();
+  }
+  return '';
+}
+
 export async function describeImageWithWorkersAI(
   ai: Ai,
   visionModel: string,
@@ -371,7 +392,7 @@ export async function describeImageWithWorkersAI(
     ? `Пользователь прислал изображение с подписью: "${caption}". Подробно опиши содержимое изображения, извлеки весь важный текст (если есть) и помоги ответить на запрос пользователя.`
     : 'Подробно опиши содержимое этого изображения на русском языке и точно извлеки весь видимый текст, цифры, даты или контакты, если они есть.';
 
-  const result = (await ai.run(visionModel as keyof AiModels, {
+  const payload = {
     messages: [
       {
         role: 'user',
@@ -385,9 +406,35 @@ export async function describeImageWithWorkersAI(
       },
     ],
     max_tokens: 900,
-  })) as WorkersAIRawResponse;
+  };
 
-  return normalizeWorkersAIResponse(result).content;
+  const modelsToTry =
+    visionModel === FALLBACK_VISION_MODEL
+      ? [visionModel]
+      : [visionModel, FALLBACK_VISION_MODEL];
+
+  let lastError: unknown;
+  for (const model of modelsToTry) {
+    try {
+      const result = (await ai.run(
+        model as keyof AiModels,
+        payload,
+      )) as WorkersAIRawResponse;
+      const text = extractVisionText(result);
+      if (text) {
+        return text;
+      }
+    } catch (err) {
+      lastError = err;
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(`Vision model ${model} failed: ${reason}`);
+    }
+  }
+
+  if (lastError !== undefined) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+  return '';
 }
 
 export async function generateEmbeddingWithWorkersAI(
