@@ -7,10 +7,7 @@ import {
   touchUserChatId,
   tryMarkUpdateProcessed,
 } from './db/queries';
-import {
-  describeImageWithWorkersAI,
-  transcribeAudioWithWorkersAI,
-} from './llm/workers-ai';
+import { describeImage, transcribeAudio } from './llm/media';
 import { isUserAllowed, verifySecretToken } from './telegram/auth';
 import { handleCallbackQuery } from './telegram/callbacks';
 import { TelegramClient } from './telegram/client';
@@ -195,16 +192,12 @@ async function handleUpdate(
       const bestPhoto =
         msg.photo.find((p) => p.width >= 320 && p.width <= 900) ??
         msg.photo[msg.photo.length - 1];
-      const visionModel =
-        env.WORKERS_AI_VISION_MODEL ||
-        '@cf/meta/llama-4-scout-17b-16e-instruct';
 
       let visionDescription: string;
       try {
         const imageBuffer = await telegram.getFileBytes(bestPhoto.file_id);
-        visionDescription = await describeImageWithWorkersAI(
-          env.AI,
-          visionModel,
+        visionDescription = await describeImage(
+          env,
           imageBuffer,
           userText || undefined,
         );
@@ -229,11 +222,10 @@ async function handleUpdate(
     if (!userText && msg.voice) {
       await telegram.sendChatAction(chatId, 'typing');
       const audioBuffer = await telegram.getFileBytes(msg.voice.file_id);
-      const whisperModel = env.WORKERS_AI_WHISPER_MODEL || '@cf/openai/whisper';
-      const transcript = await transcribeAudioWithWorkersAI(
-        env.AI,
-        whisperModel,
+      const transcript = await transcribeAudio(
+        env,
         audioBuffer,
+        msg.voice.mime_type || 'audio/ogg',
       );
 
       if (!transcript) {
